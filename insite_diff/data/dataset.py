@@ -102,9 +102,28 @@ def prepare_records(data_cfg: DataConfig) -> list[FrameRecord]:
     return records
 
 
+def check_receptive_field(cfg: Config, records: list[FrameRecord]) -> None:
+    """Warn loudly if the denoiser receptive field wraps a cell under PBC.
+
+    receptive_field = cutoff * n_layers must stay below min(box_edge)/2, else an
+    atom aggregates messages from its own periodic images (the 80-atom cells trip
+    this by design — we accept it, see README). Warning, not error.
+    """
+    rf = cfg.graph.cutoff * cfg.model.n_layers
+    min_edge = min(float(np.min(np.linalg.norm(r.cell, axis=1))) for r in records)
+    if rf >= min_edge / 2:
+        import warnings
+        msg = (f"receptive field cutoff*n_layers={rf:.1f} A >= min(box)/2={min_edge/2:.1f} A "
+               f"(min box edge {min_edge:.2f} A): atoms aggregate messages from periodic "
+               f"images. Expected for the 80-atom cells; fine if intended.")
+        print(f"\n[WARNING] {msg}\n")
+        warnings.warn(msg, stacklevel=2)
+
+
 def build_datasets(cfg: Config) -> tuple[StructureDataset, StructureDataset, DataSplit]:
     """Full pipeline: records -> trajectory split -> train/val datasets."""
     records = prepare_records(cfg.data)
+    check_receptive_field(cfg, records)
     split = trajectory_split(records, cfg.split)
     train_ds = StructureDataset(split.train, cfg.data.species)
     val_ds = StructureDataset(split.val, cfg.data.species)

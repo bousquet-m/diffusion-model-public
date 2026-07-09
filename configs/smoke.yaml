@@ -58,7 +58,7 @@ train:
 
 sampling:
   num_steps: 50
-  repaint_jumps: 1
+  n_resample: 3
   n_samples: 2
 
 mace:

@@ -67,7 +67,7 @@ def main():
         out = inpaint(schedule, model, pos, cell, item["types"], mobile_t,
                       cutoff=cfg.graph.cutoff, max_neighbors=cfg.graph.max_neighbors,
                       device=device, generator=torch.Generator(device="cpu").manual_seed(cfg.seed + i),
-                      repaint_jumps=cfg.sampling.repaint_jumps)
+                      n_resample=cfg.sampling.n_resample)
 
         numbers = item["numbers"].numpy()
         gen = to_atoms(numbers, out.cpu().numpy(), cell.numpy(), mobile)

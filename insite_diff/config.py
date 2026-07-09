@@ -137,7 +137,7 @@ class TrainConfig:
 @dataclass
 class SamplingConfig:
     num_steps: int = 1000
-    repaint_jumps: int = 1          # RePaint resample count (U) per step
+    n_resample: int = 8             # RePaint resample count (U) per step: harmonizes the seam
     n_samples: int = 8
 
 

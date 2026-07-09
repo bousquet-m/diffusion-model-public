@@ -45,7 +45,7 @@ def inpaint(
     max_neighbors: int = 0,
     device: torch.device | str = "cpu",
     generator: torch.Generator | None = None,
-    repaint_jumps: int = 1,
+    n_resample: int = 8,
 ) -> torch.Tensor:
     """Return a full (N,3) structure with context clamped and mobile generated."""
     positions = positions.to(device)
@@ -94,7 +94,7 @@ def inpaint(
     z_t = realign(z_t)
 
     for t in reversed(range(T)):
-        for u in range(repaint_jumps):
+        for u in range(n_resample):
             eps_hat = predict(z_t, t)
             mean = reverse_mean(z_t, t, eps_hat)
             if t > 0:
@@ -109,7 +109,7 @@ def inpaint(
             z_new = realign(z_new)                              # realign fixed block CoM
 
             # RePaint resampling: jump back t-1 -> t and redo, except on the last pass
-            if u < repaint_jumps - 1 and t > 0:
+            if u < n_resample - 1 and t > 0:
                 beta = schedule.betas[t].to(dtype)
                 jump_noise = _subset_com_free_noise(mobile_mask, device, dtype, generator)
                 z_t = torch.sqrt(1 - beta) * z_new + torch.sqrt(beta) * jump_noise
