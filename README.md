@@ -42,12 +42,32 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python scripts/inspect_data.py --config configs/base.yaml   # Step-0 data report
-python scripts/train.py       --config configs/smoke.yaml   # fast end-to-end smoke
-python scripts/train.py       --config configs/base.yaml    # real training
-python scripts/sample.py      --config configs/base.yaml    # inpaint a held-out structure
-python scripts/validate.py    --config configs/base.yaml    # RDF/CN/energy comparison
+# Step-0 data report (frames, densities, split, stride justification)
+python scripts/inspect_data.py --config configs/base.yaml
+
+# Fast end-to-end smoke (~seconds on CPU): trains, samples, validates plumbing
+python scripts/train.py    --config configs/smoke.yaml
+python scripts/sample.py   --config configs/smoke.yaml --checkpoint checkpoints/smoke/final.pt --n 2
+python scripts/validate.py --config configs/smoke.yaml --checkpoint checkpoints/smoke/final.pt --n 4
+
+# Real training / validation
+python scripts/train.py    --config configs/base.yaml
+python scripts/validate.py --config configs/base.yaml --checkpoint checkpoints/final.pt --n 8
+python scripts/validate.py --config configs/base.yaml --checkpoint checkpoints/final.pt --n 4 --mace  # + energies
 ```
+
+Validation writes `rdf_comparison.png`, `coordination_comparison.png`, an optional
+`energy_comparison.png`, and `summary.json` (with PASS/FAIL vs tolerances) to the output dir.
+
+## Environment notes
+
+- **e3nn 0.4.4 + torch 2.11:** e3nn needs `torch.serialization.add_safe_globals([slice])`
+  before import; handled automatically by `insite_diff/e3nn_compat.py`.
+- **tensorboard** is optional — if not installed, training logs to `runs/*/metrics.jsonl`.
+- **MACE** (`scan_v3_swa.model`) was serialized on CUDA; `analysis/mace_relax.py` patches
+  `torch.jit.load` to load it on CPU. A single-point energy is ~1.4 s for 80 atoms but
+  ~40 s for 640 atoms on CPU, so MACE energy/relaxation is **opt-in** (`--mace`) and best
+  kept to small `--n`; full LBFGS relaxation of 640-atom cells is impractical on CPU.
 
 ## Layout
 
