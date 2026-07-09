@@ -10,7 +10,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from ..data.graph import build_graph
+from ..data.graph import build_graph_torch
 from ..diffusion.noising import add_noise
 from ..diffusion.schedule import VPSchedule
 
@@ -25,10 +25,7 @@ def structure_eps_loss(model, schedule: VPSchedule, item: dict, cutoff: float,
     t = torch.randint(0, schedule.timesteps, (1,), device=device)
     ns = add_noise(schedule, pos, cell, t, generator=generator)
 
-    g = build_graph(
-        ns.x_t_cart.detach().cpu().numpy(), cell.detach().cpu().numpy(),
-        cutoff, max_neighbors=max_neighbors, device=device, dtype=pos.dtype,
-    )
+    g = build_graph_torch(ns.x_t_cart.detach(), cell, cutoff, max_neighbors=max_neighbors)
     eps_hat = model(types, g.edge_index, g.edge_vec, t.float() / schedule.timesteps, n)
     return F.mse_loss(eps_hat, ns.noise)
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from ..data.graph import build_graph
+from ..data.graph import build_graph_torch
 from ..diffusion.noising import (draw_randn, min_image, pbc_center, q_sample,
                                  structure_scale)
 from ..diffusion.schedule import VPSchedule
@@ -65,9 +65,7 @@ def inpaint(
     com_eff = com_ctx + ctx_mean * s                       # for denormalization
 
     def predict(z_t: torch.Tensor, t: int) -> torch.Tensor:
-        x_cart = z_t * s
-        g = build_graph(x_cart.detach().cpu().numpy(), cell.detach().cpu().numpy(),
-                        cutoff, max_neighbors=max_neighbors, device=device, dtype=dtype)
+        g = build_graph_torch(z_t * s, cell, cutoff, max_neighbors=max_neighbors)
         return model(types, g.edge_index, g.edge_vec,
                      torch.tensor(t / schedule.timesteps, device=device), N)
 

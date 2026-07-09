@@ -73,3 +73,41 @@ def build_graph(
     edge_vec = torch.tensor(-D, dtype=dtype, device=device)   # r_i - r_j points into the center i
     edge_len = torch.tensor(d, dtype=dtype, device=device)
     return Graph(edge_index=edge_index, edge_vec=edge_vec, edge_len=edge_len, n_nodes=n)
+
+
+def build_graph_torch(
+    positions: torch.Tensor,
+    cell: torch.Tensor,
+    cutoff: float,
+    max_neighbors: int = 0,
+) -> Graph:
+    """GPU-native minimum-image neighbor graph via O(N^2) pairwise distances.
+
+    Runs entirely on the tensors' device (no host round-trip / ASE), so it does
+    not stall a CUDA training step. For N ~ 640 the N^2 pairwise block is trivial;
+    a cell list would be needed only for much larger cells. Edge convention matches
+    ``build_graph``: src=j (neighbor), dst=i (center), edge_vec = r_i - r_j.
+    """
+    n = positions.shape[0]
+    device, dtype = positions.device, positions.dtype
+    cell = cell.to(dtype)
+    inv = torch.linalg.inv(cell)
+    delta = positions[None, :, :] - positions[:, None, :]     # (N,N,3): delta[i,j] = r_j - r_i
+    frac = delta @ inv
+    disp = (frac - torch.round(frac)) @ cell                  # minimum-image r_j - r_i
+    dist = disp.norm(dim=-1)                                  # (N,N)
+
+    within = (dist < cutoff) & (dist > 1e-8)                  # exclude self
+    if max_neighbors and max_neighbors < n:
+        d_masked = torch.where(within, dist, dist.new_full((), float("inf")))
+        keep_idx = d_masked.topk(max_neighbors, largest=False, dim=1).indices  # (N,K)
+        keep = torch.zeros_like(within)
+        keep.scatter_(1, keep_idx, True)
+        within = within & keep                               # drop inf picks in sparse rows
+
+    centers, neighbors = torch.nonzero(within, as_tuple=True)  # i=center, j=neighbor
+    edge_index = torch.stack([neighbors, centers])             # (2,E): src=j, dst=i
+    edge_vec = -disp[centers, neighbors]                       # r_i - r_j
+    edge_len = dist[centers, neighbors]
+    return Graph(edge_index=edge_index.to(device), edge_vec=edge_vec.to(dtype),
+                 edge_len=edge_len.to(dtype), n_nodes=n)
