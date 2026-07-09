@@ -30,3 +30,14 @@ def test_summary_mean_bond():
     s = summary(frames, 49, 8, cutoff=2.7)
     assert abs(s["mean_bond"] - 2.2) < 1e-6
     assert s["mean_cn"] == 1.0
+
+
+def test_coordination_center_mobile_only_restricts_centers():
+    # Two In and two O; only the first In is mobile -> only its CN is counted.
+    atoms = Atoms("In2O2", positions=[[1, 1, 1], [8, 8, 8], [1, 1, 3.15], [8, 8, 10.15]],
+                  cell=np.eye(3) * 14.0, pbc=True)
+    mask = np.array([True, False, False, False])   # In #0 mobile
+    cns, bonds = coordination([atoms], 49, 8, cutoff=2.7, masks=[mask],
+                              center_mobile_only=True)
+    assert cns.tolist() == [1]           # only mobile In #0's coordination
+    assert len(bonds) == 1

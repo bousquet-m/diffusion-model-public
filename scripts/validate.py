@@ -27,7 +27,7 @@ from ase import Atoms
 from ase.data import atomic_numbers
 
 from insite_diff.analysis import coordination, plots
-from insite_diff.analysis.rdf import all_partials, first_peak
+from insite_diff.analysis.rdf import all_partials, first_peak, partial_rdf
 from insite_diff.config import load_config
 from insite_diff.data.dataset import build_datasets
 from insite_diff.data.mask import partition
@@ -64,34 +64,49 @@ def generate(cfg, model, schedule, val_ds, n, device):
     return gen_frames, ref_frames, masks
 
 
-def structural_report(cfg, gen_frames, ref_frames, out_dir):
+def structural_report(cfg, gen_frames, ref_frames, masks, out_dir):
+    """Compare generated vs reference on MOBILE-atom statistics (the discriminating
+    instrument). All-atom stats are reported too but only as a labeled reference —
+    with a small mask they are dominated by the frozen context and cannot fail."""
     rmax, nbins, cn_cut = cfg.validation.rdf_rmax, cfg.validation.rdf_bins, cfg.validation.cn_cutoff_ino
-    ref_rdf = all_partials(ref_frames, Z_IN, Z_O, rmax, nbins)
-    gen_rdf = all_partials(gen_frames, Z_IN, Z_O, rmax, nbins)
-    plots.plot_rdfs(ref_rdf, gen_rdf, os.path.join(out_dir, "rdf_comparison.png"))
+    tol = cfg.validation.tolerances
 
-    ref_c = coordination.summary(ref_frames, Z_IN, Z_O, cn_cut)
-    gen_c = coordination.summary(gen_frames, Z_IN, Z_O, cn_cut)
+    # (i) >=1-mobile (mobile-centered) RDFs — the comparison we plot and gate on.
+    ref_rdf = all_partials(ref_frames, Z_IN, Z_O, rmax, nbins, masks, restrict="center_mobile")
+    gen_rdf = all_partials(gen_frames, Z_IN, Z_O, rmax, nbins, masks, restrict="center_mobile")
+    plots.plot_rdfs(ref_rdf, gen_rdf, os.path.join(out_dir, "rdf_comparison_mobile.png"))
+    # (ii) mobile-mobile RDFs — reported in summary.json (In-O only used for peak).
+    ref_mm = all_partials(ref_frames, Z_IN, Z_O, rmax, nbins, masks, restrict="both_mobile")
+    gen_mm = all_partials(gen_frames, Z_IN, Z_O, rmax, nbins, masks, restrict="both_mobile")
+
+    # Coordination / bond length restricted to mobile In centers.
+    ref_c = coordination.summary(ref_frames, Z_IN, Z_O, cn_cut, masks, center_mobile_only=True)
+    gen_c = coordination.summary(gen_frames, Z_IN, Z_O, cn_cut, masks, center_mobile_only=True)
     plots.plot_cn(coordination.cn_histogram(ref_c["cns"]),
                   coordination.cn_histogram(gen_c["cns"]),
                   os.path.join(out_dir, "coordination_comparison.png"))
 
-    peak_ref = first_peak(*ref_rdf["In-O"])
-    peak_gen = first_peak(*gen_rdf["In-O"])
-    tol = cfg.validation.tolerances
-    checks = {
-        "In-O_first_peak": {
+    peak_ref, peak_gen = first_peak(*ref_rdf["In-O"]), first_peak(*gen_rdf["In-O"])
+    # All-atom In-O peak, labeled non-discriminating.
+    peak_ref_all = first_peak(*partial_rdf(ref_frames, Z_IN, Z_O, rmax, nbins))
+    peak_gen_all = first_peak(*partial_rdf(gen_frames, Z_IN, Z_O, rmax, nbins))
+
+    return {
+        "In-O_first_peak_mobile": {
             "ref": peak_ref, "gen": peak_gen, "abs_diff": abs(peak_gen - peak_ref),
             "tol": tol.rdf_peak_A, "pass": abs(peak_gen - peak_ref) <= tol.rdf_peak_A,
         },
-        "mean_In-O_bond": {
+        "mean_In-O_bond_mobile": {
             "ref": ref_c["mean_bond"], "gen": gen_c["mean_bond"],
             "abs_diff": abs(gen_c["mean_bond"] - ref_c["mean_bond"]),
             "tol": tol.mean_bond_A, "pass": abs(gen_c["mean_bond"] - ref_c["mean_bond"]) <= tol.mean_bond_A,
         },
-        "mean_In-O_coordination": {"ref": ref_c["mean_cn"], "gen": gen_c["mean_cn"]},
+        "mean_In-O_coordination_mobile": {"ref": ref_c["mean_cn"], "gen": gen_c["mean_cn"]},
+        "In-O_first_peak_all_atoms": {
+            "ref": peak_ref_all, "gen": peak_gen_all,
+            "note": "NON-DISCRIMINATING: dominated by frozen context; not used for PASS/FAIL",
+        },
     }
-    return checks
 
 
 def mace_report(cfg, gen_frames, ref_frames, out_dir, relax_steps, device):
@@ -134,8 +149,9 @@ def main():
     _, val_ds, split = build_datasets(cfg)
     print(f"[validate] {len(val_ds)} held-out frames / {len(split.val_traj_ids)} trajectories")
 
-    gen_frames, ref_frames, _ = generate(cfg, model, schedule, val_ds, args.n, device)
-    report = {"n_structures": len(gen_frames), "structural": structural_report(cfg, gen_frames, ref_frames, out_dir)}
+    gen_frames, ref_frames, masks = generate(cfg, model, schedule, val_ds, args.n, device)
+    report = {"n_structures": len(gen_frames),
+              "structural": structural_report(cfg, gen_frames, ref_frames, masks, out_dir)}
 
     for name, c in report["structural"].items():
         if "pass" in c:
