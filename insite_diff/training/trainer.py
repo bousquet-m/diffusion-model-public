@@ -9,6 +9,7 @@ import copy
 import itertools
 import json
 import os
+import sys
 from pathlib import Path
 
 import torch
@@ -126,9 +127,14 @@ def save_checkpoint(path: str, step: int, model, ema: EMA, optim, cfg: Config,
 # Training
 # --------------------------------------------------------------------------- #
 def train(cfg: Config) -> str:
+    # Stream logs live to a redirected file (SLURM block-buffers stdout otherwise).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
     seed_everything(cfg.seed)
     device = select_device(cfg.device)
-    print(f"[train] device={device}")
+    print(f"[train] device={device}", flush=True)
 
     train_ds, val_ds, split = build_datasets(cfg)
     print(f"[train] train={len(train_ds)} frames/{len(split.train_traj_ids)} trajs, "
@@ -160,7 +166,7 @@ def train(cfg: Config) -> str:
 
         if step % cfg.train.log_every == 0 or step == 1:
             logger.log(step, train_loss=loss.item())
-            print(f"[train] step {step}/{cfg.train.max_steps} loss {loss.item():.4f}")
+            print(f"[train] step {step}/{cfg.train.max_steps} loss {loss.item():.4f}", flush=True)
 
         if len(val_ds) and step % cfg.train.val_every == 0:
             model.eval()
@@ -169,7 +175,7 @@ def train(cfg: Config) -> str:
                 vloss = batch_eps_loss(model, schedule, vbatch, cfg.graph.cutoff,
                                        cfg.graph.max_neighbors, device)
             logger.log(step, val_loss=vloss.item())
-            print(f"[train] step {step} val_loss {vloss.item():.4f}")
+            print(f"[train] step {step} val_loss {vloss.item():.4f}", flush=True)
             model.train()
 
         if step % cfg.train.ckpt_every == 0:

@@ -20,6 +20,7 @@ import argparse
 import dataclasses
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -153,6 +154,10 @@ def main():
     ap.add_argument("--relax-steps", type=int, default=0)
     ap.add_argument("--no-ema", action="store_true")
     args = ap.parse_args()
+    try:
+        sys.stdout.reconfigure(line_buffering=True)   # stream progress to redirected logs
+    except (AttributeError, ValueError):
+        pass
 
     cfg = load_config(args.config)
     seed_everything(cfg.seed)
