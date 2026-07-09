@@ -1,0 +1,34 @@
+# Data (external, read-only — never tracked)
+*.extxyz
+*.xyz
+*.traj
+data/
+
+# Model weights / checkpoints / logs
+*.model
+*.pt
+*.ckpt
+checkpoints/
+runs/
+outputs/
+*.png
+!docs/**/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Env / editor
+.venv/
+venv/
+.env
+.DS_Store
+*.swp
+.vscode/
+.idea/

@@ -1,0 +1,70 @@
+# Full training/validation config for milestone-one bulk In2O3 diffusion.
+seed: 0
+device: auto                      # mps if available else cpu
+
+data:
+  sources:
+    - {path: /Users/matt/Desktop/data/in2o3/640.extxyz, role: train_val}
+    - {path: /Users/matt/Desktop/data/in2o3/80.extxyz,  role: train_only}
+  traj_id_regex: 'config_type=(\S+)'
+  species: [In, O]
+  stride: 1                       # justified by MSD/autocorr check (see scripts/inspect_data.py)
+  dedup_rmsd: 0.05                # drops k80 doubled frames
+
+split:
+  by: trajectory
+  val_fraction: 0.2
+  val_source_roles: [train_val]   # only 640 structures can land in validation
+  seed: 0
+
+graph:
+  cutoff: 4.0
+  max_neighbors: 32               # cutoff * model.n_layers = 8 A < box/2 (10.1 A on 640)
+
+mask:
+  mode: interior
+  interior: {region_frac: 0.25, center: box_center}
+  random_subset: {mobile_frac: 0.15}
+
+diffusion:
+  type: vp
+  timesteps: 1000
+  beta_schedule: cosine
+  com_free: true
+  pbc_aware: true
+
+model:
+  name: e3nn_denoiser
+  n_layers: 2
+  hidden_irreps: "32x0e + 16x1o"
+  sh_lmax: 2
+  radial_basis: 8
+  sigma_embed_dim: 32
+
+train:
+  batch_size: 4
+  lr: 1.0e-3
+  max_steps: 200000
+  ema_decay: 0.999
+  loss: eps_mse
+  checkpoint_dir: checkpoints
+  ckpt_every: 5000
+  log_dir: runs
+  log_every: 50
+  val_every: 1000
+
+sampling:
+  num_steps: 1000
+  repaint_jumps: 1
+  n_samples: 8
+
+mace:
+  model_path: /Users/matt/Desktop/data/in2o3/scan_v3_swa.model
+  relax_fmax: 0.05
+  relax_steps: 200
+
+validation:
+  rdf_rmax: 6.0
+  rdf_bins: 240
+  cn_cutoff_ino: 2.7
+  tolerances: {rdf_peak_A: 0.1, mean_bond_A: 0.05}

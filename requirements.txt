@@ -1,0 +1,15 @@
+# Core (already present in the `insite-diff` conda env)
+torch>=2.1
+ase>=3.22
+e3nn>=0.5
+mace-torch
+numpy
+pyyaml
+matplotlib
+dscribe
+
+# Logging (optional; trainer degrades to JSONL if absent)
+tensorboard
+
+# Dev
+pytest

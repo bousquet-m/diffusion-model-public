@@ -1,0 +1,71 @@
+# Fast CPU end-to-end smoke test: exercises the whole pipeline on a few
+# structures in ~2 minutes. NOT a real training run — tiny model, few steps.
+seed: 0
+device: cpu
+
+data:
+  sources:
+    - {path: /Users/matt/Desktop/data/in2o3/640.extxyz, role: train_val}
+    - {path: /Users/matt/Desktop/data/in2o3/80.extxyz,  role: train_only}
+  traj_id_regex: 'config_type=(\S+)'
+  species: [In, O]
+  stride: 3                       # thin hard so the smoke set is small
+  dedup_rmsd: 0.05
+
+split:
+  by: trajectory
+  val_fraction: 0.25
+  val_source_roles: [train_val]
+  seed: 0
+
+graph:
+  cutoff: 4.0
+  max_neighbors: 16
+
+mask:
+  mode: interior
+  interior: {region_frac: 0.25, center: box_center}
+  random_subset: {mobile_frac: 0.15}
+
+diffusion:
+  type: vp
+  timesteps: 50                   # tiny schedule
+  beta_schedule: cosine
+  com_free: true
+  pbc_aware: true
+
+model:
+  name: e3nn_denoiser
+  n_layers: 2
+  hidden_irreps: "8x0e + 4x1o"    # tiny
+  sh_lmax: 1
+  radial_basis: 4
+  sigma_embed_dim: 8
+
+train:
+  batch_size: 2
+  lr: 1.0e-3
+  max_steps: 20                   # ~seconds
+  ema_decay: 0.0
+  loss: eps_mse
+  checkpoint_dir: checkpoints/smoke
+  ckpt_every: 10
+  log_dir: runs/smoke
+  log_every: 5
+  val_every: 10
+
+sampling:
+  num_steps: 50
+  repaint_jumps: 1
+  n_samples: 2
+
+mace:
+  model_path: /Users/matt/Desktop/data/in2o3/scan_v3_swa.model
+  relax_fmax: 0.1
+  relax_steps: 5
+
+validation:
+  rdf_rmax: 6.0
+  rdf_bins: 120
+  cn_cutoff_ino: 2.7
+  tolerances: {rdf_peak_A: 0.2, mean_bond_A: 0.1}
