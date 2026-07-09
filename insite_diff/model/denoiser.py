@@ -1,5 +1,10 @@
 """E(3)-equivariant, noise-conditioned denoiser (e3nn).
 
+**Unconditional.** Every atom is noised at training time and the network predicts
+the noise on every atom; there is no context/conditioning channel. Fixed-context
+inpainting is done entirely at sampling time via RePaint masking (see
+``sampling/inpaint.py``), so one trained model serves any mask geometry.
+
 A compact NequIP-style message-passing network. Nodes carry equivariant features
 (scalars + vectors); messages are tensor products of neighbor features with the
 spherical harmonics of the edge direction, weighted by a radial network that is

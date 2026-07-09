@@ -11,15 +11,20 @@ and the DFT/active-learning loop are later milestones.
 
 ## Approach (summary)
 
+- **Training is unconditional.** The denoiser noises **all** atoms and predicts the
+  noise on all of them — there is no context/conditioning channel. This means one
+  training run supports **arbitrary** masks at sampling time (RePaint), including
+  pure unconditional generation (`mask_frac = 1.0`).
 - **Diffusion:** variance-preserving (VP / DDPM), ε-prediction. Gaussian noise on
   Cartesian positions in a **center-of-mass-free** frame, **PBC-aware** (minimum
   image). The system always has periodic boundary conditions.
-- **Inpainting:** RePaint-style — context atoms are clamped to known coordinates and,
-  at each reverse step, overwritten with a re-noised copy of their known positions.
-  The fixed block's CoM is realigned after each substitution to preserve the
-  equivariant CoM-free frame.
+- **Inpainting (sampling time only):** RePaint-style — context atoms are clamped to
+  known coordinates and, at each reverse step, overwritten with a re-noised copy of
+  their known positions, with the fixed block's CoM realigned after each substitution
+  to preserve the equivariant CoM-free frame. A resampling loop (`n_resample`)
+  harmonizes the seam between generated and frozen regions.
 - **Denoiser:** E(3)-equivariant message-passing network (e3nn), conditioned on the
-  noise level, emitting a per-atom equivariant vector for mobile atoms.
+  noise level, emitting one equivariant vector per atom (the predicted CoM-free noise).
 
 ## Data
 

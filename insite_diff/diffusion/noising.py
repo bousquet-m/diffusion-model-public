@@ -17,6 +17,12 @@ under periodic boundary conditions and across the multiple cell sizes we train o
    ~unit-variance frame, so one VP schedule and one model are consistent across
    densities. We multiply back by ``s`` to return to Angstrom.
 
+   ASSUMPTION: this scale assumes the box is **uniformly filled by atoms**. It is
+   correct for the bulk periodic cells here. A later slab/surface cell contains
+   vacuum, so V overstates the occupied volume and ``s`` would be too large — the
+   normalization must be revisited (e.g. scale by the occupied sub-volume, or by a
+   fixed per-species length) before this code is used on slabs. (milestone 2)
+
 3. **VP/DDPM.** In the normalized CoM-free frame, ``z_t = sqrt(abar_t) z_0 +
    sqrt(1-abar_t) eps`` with ``eps`` CoM-free. The network sees real-Angstrom
    geometry (z_t * s) for its neighbor graph and predicts ``eps``.
