@@ -1,8 +1,9 @@
 # Data (external, read-only — never tracked)
+# NOTE: anchored to repo root so it does not swallow the insite_diff/data package.
 *.extxyz
 *.xyz
 *.traj
-data/
+/data/
 
 # Model weights / checkpoints / logs
 *.model
