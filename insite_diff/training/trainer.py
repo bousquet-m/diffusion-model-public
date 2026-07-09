@@ -95,6 +95,19 @@ def build_model(cfg: Config, avg_neighbors: float) -> E3Denoiser:
     )
 
 
+def load_model(path: str, device="cpu", use_ema: bool = True) -> tuple[E3Denoiser, Config, float]:
+    """Rebuild the denoiser from a checkpoint. Prefers EMA weights when present."""
+    from ..config import _from_dict  # local import to avoid cycles
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    cfg = _from_dict(Config, ckpt["config"])
+    avg_neighbors = ckpt["avg_neighbors"]
+    model = build_model(cfg, avg_neighbors).to(device)
+    state = ckpt["ema"] if (use_ema and ckpt.get("ema") is not None) else ckpt["model"]
+    model.load_state_dict(state)
+    model.eval()
+    return model, cfg, avg_neighbors
+
+
 def save_checkpoint(path: str, step: int, model, ema: EMA, optim, cfg: Config,
                     avg_neighbors: float):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
