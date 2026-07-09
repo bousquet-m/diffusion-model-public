@@ -163,7 +163,7 @@ class ValidationConfig:
 @dataclass
 class Config:
     seed: int = 0
-    device: str = "auto"            # "auto" -> mps if available else cpu
+    device: str = "auto"            # "auto" -> cuda, else mps, else cpu
     data: DataConfig = field(default_factory=DataConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)

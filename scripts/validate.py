@@ -94,9 +94,10 @@ def structural_report(cfg, gen_frames, ref_frames, out_dir):
     return checks
 
 
-def mace_report(cfg, gen_frames, ref_frames, out_dir, relax_steps):
+def mace_report(cfg, gen_frames, ref_frames, out_dir, relax_steps, device):
     from insite_diff.analysis.mace_relax import load_calculator, potential_energy, relax
-    calc = load_calculator(cfg.mace.model_path, device="cpu")
+    mace_device = "cuda" if getattr(device, "type", str(device)) == "cuda" else "cpu"
+    calc = load_calculator(cfg.mace.model_path, device=mace_device)
     e_ref = [potential_energy(a, calc) / len(a) for a in ref_frames]
     e_gen = [potential_energy(a, calc) / len(a) for a in gen_frames]
     energies = {"reference": e_ref, "generated": e_gen}
@@ -147,7 +148,7 @@ def main():
     if args.mace:
         relax_steps = args.relax_steps if args.relax_steps is not None else cfg.mace.relax_steps
         print(f"[validate] MACE energies (relax_steps={relax_steps}) — slow on CPU...")
-        report["mace"] = mace_report(cfg, gen_frames, ref_frames, out_dir, relax_steps)
+        report["mace"] = mace_report(cfg, gen_frames, ref_frames, out_dir, relax_steps, device)
         for k, v in report["mace"].items():
             print(f"[validate] energy/atom {k}: {v['mean']:.4f} +/- {v['std']:.4f} eV")
 

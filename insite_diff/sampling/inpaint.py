@@ -21,14 +21,14 @@ import numpy as np
 import torch
 
 from ..data.graph import build_graph
-from ..diffusion.noising import (min_image, pbc_center, q_sample, structure_scale)
+from ..diffusion.noising import (draw_randn, min_image, pbc_center, q_sample,
+                                 structure_scale)
 from ..diffusion.schedule import VPSchedule
 
 
 def _subset_com_free_noise(mask: torch.Tensor, device, dtype, generator=None) -> torch.Tensor:
     """Gaussian noise (N,3) whose mean over the ``mask`` atoms is zero."""
-    n = mask.shape[0]
-    eps = torch.randn(n, 3, generator=generator, device=device, dtype=dtype)
+    eps = draw_randn((mask.shape[0], 3), device, dtype, generator)
     eps[mask] = eps[mask] - eps[mask].mean(dim=0, keepdim=True)
     return eps
 
@@ -88,7 +88,7 @@ def inpaint(
 
     # --- initialize z at t = T-1: context noised, mobile from prior ---
     T = schedule.timesteps
-    z_t = torch.randn(N, 3, generator=generator, device=device, dtype=dtype)
+    z_t = draw_randn((N, 3), device, dtype, generator)
     z_t[mobile_mask] = z_t[mobile_mask] - z_t[mobile_mask].mean(0, keepdim=True)
     z_t[context] = renoise_context(T - 1)[context]
     z_t = realign(z_t)

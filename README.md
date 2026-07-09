@@ -69,6 +69,20 @@ Validation writes `rdf_comparison.png`, `coordination_comparison.png`, an option
   ~40 s for 640 atoms on CPU, so MACE energy/relaxation is **opt-in** (`--mace`) and best
   kept to small `--n`; full LBFGS relaxation of 640-atom cells is impractical on CPU.
 
+## GPU / cluster
+
+- Set `device: auto` (picks CUDA when available) or `device: cuda` explicitly. RNG is
+  decoupled from the compute device, so CPU-seeded sampling reproducibly drives CUDA compute.
+- MACE runs on GPU when the compute device is CUDA (validation plumbs it through), which
+  removes the 640-atom energy bottleneck seen on CPU.
+- **Known throughput limit (not a correctness issue):** the neighbor graph is rebuilt every
+  diffusion step via ASE on host memory (`.cpu().numpy()`), so each step incurs a host sync
+  and a CPU neighbor-list build. This caps GPU utilization. For long GPU runs, replace
+  `data/graph.py` with a GPU-native periodic neighbor list (e.g. a cell-list / the MACE or
+  matscipy neighbor routines) — this is the single highest-impact optimization.
+- Structures are processed one at a time (variable atom count); there is no batched-graph
+  path or multi-GPU/distributed training yet. Fine for single-GPU testing.
+
 ## Layout
 
 ```

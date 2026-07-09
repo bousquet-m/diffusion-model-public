@@ -80,12 +80,24 @@ def structure_scale(cell: torch.Tensor) -> torch.Tensor:
     return vol ** (1.0 / 3.0) / math.sqrt(12.0)
 
 
+def draw_randn(shape, device, dtype, generator: torch.Generator | None = None) -> torch.Tensor:
+    """torch.randn that tolerates a generator on a different device than ``device``.
+
+    A ``generator`` must live on the same device as the tensor being drawn, so we
+    draw on the generator's device (CPU for reproducible sampling) and move to the
+    compute device. With no generator we draw directly on ``device``.
+    """
+    gdev = generator.device if generator is not None else device
+    x = torch.randn(*shape, generator=generator, device=gdev, dtype=dtype)
+    return x.to(device)
+
+
 def com_free_noise(n_atoms: int, cell: torch.Tensor | None = None,
                    generator: torch.Generator | None = None,
                    device: torch.device | str = "cpu",
                    dtype: torch.dtype = torch.float32) -> torch.Tensor:
     """Gaussian noise (n_atoms, 3) projected to zero mean over the atom axis."""
-    eps = torch.randn(n_atoms, 3, generator=generator, device=device, dtype=dtype)
+    eps = draw_randn((n_atoms, 3), device, dtype, generator)
     return eps - eps.mean(dim=0, keepdim=True)
 
 

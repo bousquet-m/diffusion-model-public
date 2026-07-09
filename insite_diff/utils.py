@@ -21,10 +21,12 @@ def seed_everything(seed: int) -> None:
 def select_device(pref: str = "auto") -> torch.device:
     """Resolve a device string.
 
-    "auto" -> MPS if available (Apple Silicon), else CPU. Explicit "cpu"/"mps"/
-    "cuda" are honored as given. We never assume CUDA on this machine.
+    "auto" -> CUDA if available (GPU cluster), else MPS (Apple Silicon), else CPU.
+    Explicit "cpu"/"mps"/"cuda" are honored as given.
     """
     if pref == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
         if torch.backends.mps.is_available():
             return torch.device("mps")
         return torch.device("cpu")
