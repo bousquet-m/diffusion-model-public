@@ -59,10 +59,33 @@ python scripts/validate.py --config configs/smoke.yaml --checkpoint checkpoints/
 python scripts/train.py    --config configs/base.yaml
 python scripts/validate.py --config configs/base.yaml --checkpoint checkpoints/final.pt --n 8
 python scripts/validate.py --config configs/base.yaml --checkpoint checkpoints/final.pt --n 4 --mace  # + energies
+
+# Mask-fraction sweep — the core milestone-1b evaluation (see below)
+python scripts/sweep.py    --config configs/base.yaml --checkpoint checkpoints/final.pt \
+    --n-structures 3 --n-seeds 10 --out outputs/sweep
 ```
 
-Validation writes `rdf_comparison.png`, `coordination_comparison.png`, an optional
-`energy_comparison.png`, and `summary.json` (with PASS/FAIL vs tolerances) to the output dir.
+Validation writes `rdf_comparison_mobile.png`, `coordination_comparison.png`, an optional
+`energy_comparison.png`, and `summary.json` to the output dir.
+
+## Masking & validation (milestone 1b)
+
+- **Mask by atom fraction, not geometry size.** `mask.mask_frac` is the fraction of
+  atoms regenerated; the region is grown to that exact count in the chosen
+  `geometry` (`sphere` | `cube` | `slab`). `slab` (top/bottom-K along an axis) is the
+  geometry milestone two needs for surfaces — implemented and tested, unused here.
+  `mask_frac = 1.0` is pure unconditional generation (no context).
+- **Metrics are restricted to MOBILE atoms.** RDFs and coordination are computed over
+  pairs where the center is mobile (`center_mobile`) and mobile–mobile; PASS/FAIL is
+  based on these. All-atom stats are still reported but labeled non-discriminating —
+  with a small mask, ~all of a whole-structure histogram is frozen context and cannot
+  fail. This was a correctness fix: the old all-atom validation could not fail.
+- **The sweep** runs the mask ladder (default `0.016…1.0`) and, per fraction, reports
+  mobile RDF/CN/bond, **multi-seed spread** (permutation-aware RMSD over mobile atoms,
+  Hungarian within species — zero spread would mean the mobile atoms were never
+  noised), and **memorization** (SOAP nearest-neighbor similarity of mobile-atom
+  environments to the training set). It traces how faithfully the model regenerates a
+  region as the hole grows.
 
 ## Environment notes
 
@@ -80,21 +103,23 @@ Validation writes `rdf_comparison.png`, `coordination_comparison.png`, an option
   decoupled from the compute device, so CPU-seeded sampling reproducibly drives CUDA compute.
 - MACE runs on GPU when the compute device is CUDA (validation plumbs it through), which
   removes the 640-atom energy bottleneck seen on CPU.
-- **Known throughput limit (not a correctness issue):** the neighbor graph is rebuilt every
-  diffusion step via ASE on host memory (`.cpu().numpy()`), so each step incurs a host sync
-  and a CPU neighbor-list build. This caps GPU utilization. For long GPU runs, replace
-  `data/graph.py` with a GPU-native periodic neighbor list (e.g. a cell-list / the MACE or
-  matscipy neighbor routines) — this is the single highest-impact optimization.
-- Structures are processed one at a time (variable atom count); there is no batched-graph
-  path or multi-GPU/distributed training yet. Fine for single-GPU testing.
+- **Neighbor list is now GPU-native.** Training and sampling use `build_graph_torch`
+  (an on-device O(N²) minimum-image pairwise builder), so a CUDA step no longer stalls
+  on an ASE/CPU rebuild + host copy. It matches ASE numerically (tested). The ASE
+  builder is kept for analysis and as the equivalence oracle. For N≈640 the N² block is
+  trivial; much larger cells would want a cell list.
+- **Still deferred:** structures are processed one at a time (the denoiser's CoM-free
+  step assumes a single graph), so there is no batched-graph path or multi-GPU/DDP yet.
+  Fine for single-GPU runs; batching is the next throughput lever after this.
 
 ## Layout
 
 ```
 insite_diff/{data,diffusion,model,sampling,analysis,training}/   # package
 configs/                                                         # base.yaml, smoke.yaml
-scripts/                                                         # train/sample/validate/inspect
-tests/                                                           # CoM+PBC, inpaint clamp, equivariance, split
+scripts/                                                         # inspect_data, train, sample, validate, sweep
+tests/                                                           # CoM+PBC, inpaint clamp, equivariance, split,
+                                                                 # mask counts, graph equivalence, perm-RMSD
 ```
 
 ## Tests
