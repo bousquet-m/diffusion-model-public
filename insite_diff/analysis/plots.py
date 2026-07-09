@@ -41,6 +41,30 @@ def plot_cn(ref_cn, gen_cn, out_path: str, max_cn: int = 10):
     plt.close(fig)
 
 
+def plot_sweep(fractions, panels: dict, out_path: str):
+    """One panel per metric vs mask_frac.
+
+    panels: {title: {"gen": [...], "ref": [...] (optional), "ylabel": str}}.
+    """
+    n = len(panels)
+    ncol = min(3, n)
+    nrow = (n + ncol - 1) // ncol
+    fig, axes = plt.subplots(nrow, ncol, figsize=(5 * ncol, 4 * nrow), squeeze=False)
+    for ax, (title, series) in zip(axes.flat, panels.items()):
+        ax.plot(fractions, series["gen"], "o-", color="tab:red", label="generated")
+        if series.get("ref") is not None:
+            ax.plot(fractions, series["ref"], "s--", color="k", label="reference")
+        ax.set_title(title)
+        ax.set_xlabel("mask_frac")
+        ax.set_ylabel(series.get("ylabel", ""))
+        ax.legend()
+    for ax in axes.flat[n:]:
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+
+
 def plot_energy_hist(energies: dict, out_path: str, per_atom: bool = True):
     """energies: {label: array of energies}. Overlaid histograms."""
     fig, ax = plt.subplots(figsize=(6, 4))
