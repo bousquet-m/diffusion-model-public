@@ -23,9 +23,11 @@ graph:
   max_neighbors: 16
 
 mask:
-  mode: interior
-  interior: {region_frac: 0.25, center: box_center}
-  random_subset: {mobile_frac: 0.15}
+  mask_frac: 0.10
+  geometry: sphere
+  center: box_center
+  slab_axis: 2
+  slab_side: top
 
 diffusion:
   type: vp

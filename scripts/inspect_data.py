@@ -86,7 +86,7 @@ def main():
     print("\n=== EXAMPLE INTERIOR MASK (val frame) ===")
     rng = np.random.default_rng(cfg.seed)
     mob = partition(sample["positions"].numpy(), sample["cell"].numpy(), cfg.mask, rng)
-    print(f"  mode={cfg.mask.mode} region_frac={cfg.mask.interior.region_frac}: "
+    print(f"  geometry={cfg.mask.geometry} mask_frac={cfg.mask.mask_frac}: "
           f"mobile={int(mob.sum())} context={int((~mob).sum())} of {len(mob)}")
 
     print("\n=== STRIDE JUSTIFICATION: within-trajectory RMSD vs frame separation ===")

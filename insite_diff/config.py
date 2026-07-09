@@ -73,25 +73,27 @@ class GraphConfig:
 
 
 @dataclass
-class MaskInteriorConfig:
-    region_frac: float = 0.25       # edge of the masked cube as a fraction of box edge
-    center: str = "box_center"      # "box_center" | "random"
-
-
-@dataclass
-class MaskRandomSubsetConfig:
-    mobile_frac: float = 0.15
-
-
-@dataclass
 class MaskConfig:
-    mode: str = "interior"          # "interior" | "random_subset"
-    interior: MaskInteriorConfig = field(default_factory=MaskInteriorConfig)
-    random_subset: MaskRandomSubsetConfig = field(default_factory=MaskRandomSubsetConfig)
+    """Which atoms to regenerate, parameterized by ATOM fraction (not cube edge).
+
+    mask_frac is the fraction of atoms made mobile; the region is grown to that
+    exact count in the chosen geometry. mask_frac=1.0 is pure unconditional
+    generation (no context).
+    """
+
+    mask_frac: float = 0.10         # fraction of ATOMS to regenerate
+    geometry: str = "sphere"        # sphere | cube | slab
+    center: str = "box_center"      # box_center | random  (sphere/cube)
+    slab_axis: int = 2              # 0/1/2 -> x/y/z (slab)
+    slab_side: str = "top"          # top | bottom (slab)
 
     def __post_init__(self) -> None:
-        if self.mode not in ("interior", "random_subset"):
-            raise ValueError(f"mask.mode must be interior|random_subset, got {self.mode!r}")
+        if self.geometry not in ("sphere", "cube", "slab"):
+            raise ValueError(f"mask.geometry must be sphere|cube|slab, got {self.geometry!r}")
+        if self.center not in ("box_center", "random"):
+            raise ValueError(f"mask.center must be box_center|random, got {self.center!r}")
+        if self.slab_side not in ("top", "bottom"):
+            raise ValueError(f"mask.slab_side must be top|bottom, got {self.slab_side!r}")
 
 
 @dataclass

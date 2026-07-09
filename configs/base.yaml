@@ -22,9 +22,11 @@ graph:
   max_neighbors: 32               # cutoff * model.n_layers = 8 A < box/2 (10.1 A on 640)
 
 mask:
-  mode: interior
-  interior: {region_frac: 0.25, center: box_center}
-  random_subset: {mobile_frac: 0.15}
+  mask_frac: 0.10               # fraction of ATOMS to regenerate (mobile)
+  geometry: sphere              # sphere | cube | slab
+  center: box_center            # box_center | random
+  slab_axis: 2
+  slab_side: top
 
 diffusion:
   type: vp

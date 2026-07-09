@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from insite_diff.data.graph import build_graph  # noqa: F401 (ensures import path)
-from insite_diff.data.mask import interior_mask
+from insite_diff.data.mask import cube_mask
 from insite_diff.diffusion.noising import min_image
 from insite_diff.diffusion.schedule import VPSchedule
 from insite_diff.model.denoiser import E3Denoiser
@@ -17,7 +17,7 @@ def _setup(n=80, box=15.0, seed=0):
     frac = torch.rand(n, 3)
     pos = frac @ cell
     types = torch.randint(0, 2, (n,))
-    mobile = torch.tensor(interior_mask(pos.numpy(), cell.numpy(), region_frac=0.4))
+    mobile = torch.tensor(cube_mask(pos.numpy(), cell.numpy(), mask_frac=0.4))
     model = E3Denoiser(n_species=2, hidden_irreps="8x0e + 4x1o", sh_lmax=1, n_layers=1,
                        radial_basis=4, sigma_embed_dim=8, cutoff=4.0).eval()
     sched = VPSchedule(timesteps=15, beta_schedule="cosine")
