@@ -56,9 +56,9 @@ train:
   max_steps: 200000
   ema_decay: 0.999
   loss: eps_mse
-  checkpoint_dir: checkpoints
+  checkpoint_dir: checkpoints/gen3
   ckpt_every: 5000
-  log_dir: runs
+  log_dir: runs/gen3
   log_every: 50
   val_every: 1000
 
