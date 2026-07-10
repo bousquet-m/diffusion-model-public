@@ -181,14 +181,22 @@ class Config:
 # --------------------------------------------------------------------------- #
 # Loading
 # --------------------------------------------------------------------------- #
-def _from_dict(cls: type, data: Any) -> Any:
-    """Recursively build a dataclass tree from nested dicts, rejecting unknown keys."""
+def _from_dict(cls: type, data: Any, strict: bool = True) -> Any:
+    """Recursively build a dataclass tree from nested dicts.
+
+    ``strict=True`` (config files) rejects unknown keys — mistyped config fails
+    loudly. ``strict=False`` (loading a config embedded in an old checkpoint)
+    drops keys no longer in the schema, so a checkpoint saved under an earlier
+    config schema still loads (fields that changed fall back to their defaults).
+    """
     if not is_dataclass(cls) or not isinstance(data, dict):
         return data
     field_map = {f.name: f for f in fields(cls)}
     unknown = set(data) - set(field_map)
     if unknown:
-        raise ValueError(f"unknown config keys for {cls.__name__}: {sorted(unknown)}")
+        if strict:
+            raise ValueError(f"unknown config keys for {cls.__name__}: {sorted(unknown)}")
+        data = {k: v for k, v in data.items() if k in field_map}
     # Resolve string annotations (PEP 563 / `from __future__ import annotations`)
     # back to real types so nested dataclasses are detected.
     hints = get_type_hints(cls)
@@ -198,7 +206,7 @@ def _from_dict(cls: type, data: Any) -> Any:
         # list[SourceConfig] and the like are handled by each dataclass __post_init__,
         # so only recurse into nested single-dataclass *fields* here.
         if is_dataclass(ftype) and isinstance(value, dict):
-            kwargs[name] = _from_dict(ftype, value)
+            kwargs[name] = _from_dict(ftype, value, strict=strict)
         else:
             kwargs[name] = value
     return cls(**kwargs)
