@@ -103,10 +103,14 @@ class DiffusionConfig:
     beta_schedule: str = "cosine"   # cosine | linear
     com_free: bool = True
     pbc_aware: bool = True
+    loss_weighting: str = "uniform"  # uniform | min_snr
+    min_snr_gamma: float = 5.0       # min-SNR-gamma (Hang 2023); down-weights easy low-noise steps
 
     def __post_init__(self) -> None:
         if self.type != "vp":
             raise ValueError("milestone one uses VP diffusion only")
+        if self.loss_weighting not in ("uniform", "min_snr"):
+            raise ValueError(f"loss_weighting must be uniform|min_snr, got {self.loss_weighting!r}")
 
 
 @dataclass

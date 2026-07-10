@@ -161,7 +161,9 @@ def train(cfg: Config) -> str:
     for step in range(1, cfg.train.max_steps + 1):
         batch = next(data_iter)
         loss = batch_eps_loss(model, schedule, batch, cfg.graph.cutoff,
-                              cfg.graph.max_neighbors, device)
+                              cfg.graph.max_neighbors, device,
+                              loss_weighting=cfg.diffusion.loss_weighting,
+                              min_snr_gamma=cfg.diffusion.min_snr_gamma)
         optim.zero_grad()
         loss.backward()
         optim.step()
@@ -176,7 +178,9 @@ def train(cfg: Config) -> str:
             with torch.no_grad():
                 vbatch = [val_ds[i] for i in range(min(len(val_ds), cfg.train.batch_size))]
                 vloss = batch_eps_loss(model, schedule, vbatch, cfg.graph.cutoff,
-                                       cfg.graph.max_neighbors, device)
+                                       cfg.graph.max_neighbors, device,
+                                       loss_weighting=cfg.diffusion.loss_weighting,
+                                       min_snr_gamma=cfg.diffusion.min_snr_gamma)
             logger.log(step, val_loss=vloss.item())
             print(f"[train] step {step} val_loss {vloss.item():.4f}", flush=True)
             model.train()

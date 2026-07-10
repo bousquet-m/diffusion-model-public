@@ -55,6 +55,19 @@ class VPSchedule:
         # DDPM posterior variance: beta_t * (1 - abar_{t-1}) / (1 - abar_t)
         self.posterior_variance = betas * (1.0 - alpha_bar_prev) / (1.0 - alpha_bar)
 
+        # Signal-to-noise ratio per step, for min-SNR-gamma loss weighting.
+        self.snr = alpha_bar / (1.0 - alpha_bar)
+
+    def min_snr_eps_weight(self, t: torch.Tensor, gamma: float) -> torch.Tensor:
+        """min-SNR-gamma loss weight for eps-prediction: min(SNR, gamma)/SNR.
+
+        Equals 1 at high noise (SNR<=gamma) and gamma/SNR<1 at low noise, so it
+        down-weights the easy low-noise steps and shifts learning toward the
+        harder mid/high-noise regime.
+        """
+        snr = self.snr.to(torch.float32)[t]
+        return torch.clamp(snr, max=gamma) / snr
+
     def to(self, device: torch.device | str) -> "VPSchedule":
         for name, val in vars(self).items():
             if isinstance(val, torch.Tensor):

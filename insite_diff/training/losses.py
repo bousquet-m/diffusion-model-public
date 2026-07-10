@@ -16,7 +16,8 @@ from ..diffusion.schedule import VPSchedule
 
 
 def structure_eps_loss(model, schedule: VPSchedule, item: dict, cutoff: float,
-                       max_neighbors: int, device, generator=None) -> torch.Tensor:
+                       max_neighbors: int, device, generator=None,
+                       loss_weighting: str = "uniform", min_snr_gamma: float = 5.0) -> torch.Tensor:
     pos = item["positions"].to(device)
     cell = item["cell"].to(device)
     types = item["types"].to(device)
@@ -27,13 +28,18 @@ def structure_eps_loss(model, schedule: VPSchedule, item: dict, cutoff: float,
 
     g = build_graph_torch(ns.x_t_cart.detach(), cell, cutoff, max_neighbors=max_neighbors)
     eps_hat = model(types, g.edge_index, g.edge_vec, t.float() / schedule.timesteps, n)
-    return F.mse_loss(eps_hat, ns.noise)
+    mse = F.mse_loss(eps_hat, ns.noise)
+    if loss_weighting == "min_snr":
+        mse = schedule.min_snr_eps_weight(t, min_snr_gamma).squeeze() * mse
+    return mse
 
 
 def batch_eps_loss(model, schedule: VPSchedule, batch: list[dict], cutoff: float,
-                   max_neighbors: int, device, generator=None) -> torch.Tensor:
+                   max_neighbors: int, device, generator=None,
+                   loss_weighting: str = "uniform", min_snr_gamma: float = 5.0) -> torch.Tensor:
     losses = [
-        structure_eps_loss(model, schedule, item, cutoff, max_neighbors, device, generator)
+        structure_eps_loss(model, schedule, item, cutoff, max_neighbors, device, generator,
+                           loss_weighting, min_snr_gamma)
         for item in batch
     ]
     return torch.stack(losses).mean()

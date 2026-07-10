@@ -72,6 +72,16 @@ def test_forward_noising_stays_com_free():
         assert torch.allclose(ns.z_t.mean(0), torch.zeros(3), atol=1e-5)
 
 
+def test_min_snr_weight_profile():
+    sched = VPSchedule(timesteps=1000, beta_schedule="cosine")
+    w_low = sched.min_snr_eps_weight(torch.tensor([1]), 5.0).item()      # easy, low noise
+    w_high = sched.min_snr_eps_weight(torch.tensor([999]), 5.0).item()   # hard, high noise
+    assert w_low < 0.01                        # low-noise steps heavily down-weighted
+    assert abs(w_high - 1.0) < 1e-3            # high-noise steps keep full weight
+    allw = sched.min_snr_eps_weight(torch.arange(1000), 5.0)
+    assert (allw > 0).all() and (allw <= 1.0 + 1e-6).all()
+
+
 def test_scale_matches_uniform_fill_std():
     # s = V^(1/3)/sqrt(12); for a cube that is box/sqrt(12).
     _, cell = _random_structure(box=10.0)

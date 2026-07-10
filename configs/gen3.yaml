@@ -1,0 +1,79 @@
+# gen3: fixes for the mid-noise "dead zone" found by scripts/diagnose.py.
+#   1. Bigger denoiser — WIDER + higher-l (not deeper): more capacity for
+#      mid-noise inference while keeping the receptive field small.
+#   2. min-SNR-gamma loss weighting — shifts learning off the easy low-noise
+#      steps (which gen2 over-fit) toward the neglected mid/high-noise steps.
+# Receptive field is unchanged: cutoff 4.0 x n_layers 2 = 8 A < box/2 (10.1 A on 640).
+seed: 0
+device: auto
+
+data:
+  sources:
+    - {path: /Users/matt/Desktop/data/in2o3/640.extxyz, role: train_val}
+    - {path: /Users/matt/Desktop/data/in2o3/80.extxyz,  role: train_only}
+  traj_id_regex: 'config_type=(\S+)'
+  species: [In, O]
+  stride: 1
+  dedup_rmsd: 0.05
+
+split:
+  by: trajectory
+  val_fraction: 0.2
+  val_source_roles: [train_val]
+  seed: 0
+
+graph:
+  cutoff: 4.0
+  max_neighbors: 32
+
+mask:
+  mask_frac: 0.10
+  geometry: sphere
+  center: box_center
+  slab_axis: 2
+  slab_side: top
+
+diffusion:
+  type: vp
+  timesteps: 1000
+  beta_schedule: cosine
+  com_free: true
+  pbc_aware: true
+  loss_weighting: min_snr         # <-- down-weight easy low-noise steps
+  min_snr_gamma: 5.0
+
+model:                            # <-- wider + adds l=2; depth/cutoff unchanged (RF-safe)
+  name: e3nn_denoiser
+  n_layers: 2
+  hidden_irreps: "128x0e + 64x1o + 32x2e"
+  sh_lmax: 3
+  radial_basis: 12
+  sigma_embed_dim: 64
+
+train:
+  batch_size: 4
+  lr: 1.0e-3
+  max_steps: 200000
+  ema_decay: 0.999
+  loss: eps_mse
+  checkpoint_dir: checkpoints
+  ckpt_every: 5000
+  log_dir: runs
+  log_every: 50
+  val_every: 1000
+
+sampling:
+  num_steps: 1000
+  n_resample: 8
+  n_samples: 8
+
+mace:
+  model_path: /Users/matt/Desktop/data/in2o3/scan_v3_swa.model
+  relax_fmax: 0.05
+  relax_steps: 200
+
+validation:
+  rdf_rmax: 6.0
+  rdf_bins: 240
+  cn_cutoff_ino: 2.7
+  tolerances: {rdf_peak_A: 0.1, mean_bond_A: 0.05}
