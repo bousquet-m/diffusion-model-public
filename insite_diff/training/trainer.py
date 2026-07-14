@@ -18,10 +18,10 @@ from torch.utils.data import DataLoader
 from ..config import Config, config_to_dict
 from ..data.dataset import build_datasets
 from ..data.graph import build_graph
-from ..diffusion.schedule import VPSchedule
+from ..diffusion.schedule import VESchedule, VPSchedule
 from ..model.denoiser import E3Denoiser
 from ..utils import seed_everything, select_device
-from .losses import batch_eps_loss
+from .losses import batch_eps_loss, batch_ve_loss
 
 
 # --------------------------------------------------------------------------- #
@@ -143,7 +143,19 @@ def train(cfg: Config) -> str:
     print(f"[train] train={len(train_ds)} frames/{len(split.train_traj_ids)} trajs, "
           f"val={len(val_ds)} frames/{len(split.val_traj_ids)} trajs")
 
-    schedule = VPSchedule(cfg.diffusion.timesteps, cfg.diffusion.beta_schedule).to(device)
+    d = cfg.diffusion
+    if d.type == "ve":
+        schedule = VESchedule(d.sigma_min, d.sigma_max, d.n_sigma_levels).to(device)
+        def compute_loss(batch):
+            return batch_ve_loss(model, schedule, batch, cfg.graph.cutoff,
+                                 cfg.graph.max_neighbors, device)
+    else:
+        schedule = VPSchedule(d.timesteps, d.beta_schedule).to(device)
+        def compute_loss(batch):
+            return batch_eps_loss(model, schedule, batch, cfg.graph.cutoff,
+                                  cfg.graph.max_neighbors, device,
+                                  loss_weighting=d.loss_weighting, min_snr_gamma=d.min_snr_gamma)
+    print(f"[train] diffusion={d.type}")
     avg_neighbors = estimate_avg_neighbors(train_ds, cfg.graph.cutoff, cfg.graph.max_neighbors)
     model = build_model(cfg, avg_neighbors).to(device)
     n_params = sum(p.numel() for p in model.parameters())
@@ -160,10 +172,7 @@ def train(cfg: Config) -> str:
     model.train()
     for step in range(1, cfg.train.max_steps + 1):
         batch = next(data_iter)
-        loss = batch_eps_loss(model, schedule, batch, cfg.graph.cutoff,
-                              cfg.graph.max_neighbors, device,
-                              loss_weighting=cfg.diffusion.loss_weighting,
-                              min_snr_gamma=cfg.diffusion.min_snr_gamma)
+        loss = compute_loss(batch)
         optim.zero_grad()
         loss.backward()
         optim.step()
@@ -177,10 +186,7 @@ def train(cfg: Config) -> str:
             model.eval()
             with torch.no_grad():
                 vbatch = [val_ds[i] for i in range(min(len(val_ds), cfg.train.batch_size))]
-                vloss = batch_eps_loss(model, schedule, vbatch, cfg.graph.cutoff,
-                                       cfg.graph.max_neighbors, device,
-                                       loss_weighting=cfg.diffusion.loss_weighting,
-                                       min_snr_gamma=cfg.diffusion.min_snr_gamma)
+                vloss = compute_loss(vbatch)
             logger.log(step, val_loss=vloss.item())
             print(f"[train] step {step} val_loss {vloss.item():.4f}", flush=True)
             model.train()

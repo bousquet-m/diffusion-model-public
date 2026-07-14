@@ -1,0 +1,53 @@
+# Fast CPU smoke for the VE (amorphous) recipe — plumbing check, ~seconds.
+seed: 0
+device: cpu
+
+data:
+  sources:
+    - {path: /Users/matt/Desktop/data/in2o3/640.extxyz, role: train_val}
+    - {path: /Users/matt/Desktop/data/in2o3/80.extxyz,  role: train_only}
+  traj_id_regex: 'config_type=(\S+)'
+  species: [In, O]
+  stride: 3
+  dedup_rmsd: 0.05
+
+split: {by: trajectory, val_fraction: 0.25, val_source_roles: [train_val], seed: 0}
+graph: {cutoff: 5.0, max_neighbors: 16}
+mask: {mask_frac: 0.1, geometry: sphere, center: box_center, slab_axis: 2, slab_side: top}
+
+diffusion:
+  type: ve
+  sigma_min: 0.01
+  sigma_max: 0.75
+  n_sigma_levels: 20
+  langevin_steps: 2
+  langevin_step_lr: 2.0e-5
+  refine_steps: 5
+
+model:
+  name: e3nn_denoiser
+  n_layers: 2
+  hidden_irreps: "8x0e + 4x1o"
+  sh_lmax: 1
+  radial_basis: 4
+  sigma_embed_dim: 8
+
+train:
+  batch_size: 2
+  lr: 1.0e-3
+  max_steps: 20
+  ema_decay: 0.0
+  loss: dsm
+  checkpoint_dir: checkpoints/smoke_ve
+  ckpt_every: 10
+  log_dir: runs/smoke_ve
+  log_every: 5
+  val_every: 10
+
+sampling: {num_steps: 1000, n_resample: 2, n_samples: 2}
+mace: {model_path: /Users/matt/Desktop/data/in2o3/scan_v3_swa.model, relax_fmax: 0.1, relax_steps: 2}
+validation:
+  rdf_rmax: 6.0
+  rdf_bins: 120
+  cn_cutoff_ino: 2.7
+  tolerances: {rdf_peak_A: 0.2, mean_bond_A: 0.1}
