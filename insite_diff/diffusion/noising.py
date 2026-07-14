@@ -155,3 +155,32 @@ def add_noise(schedule: VPSchedule, positions: torch.Tensor, cell: torch.Tensor,
                            device=z0.device, dtype=z0.dtype)
     z_t = q_sample(schedule, z0, t, noise)
     return NoisedSample(z_t=z_t, x_t_cart=z_t * s, noise=noise, z0=z0, com=com, scale=s)
+
+
+# --------------------------------------------------------------------------- #
+# Variance-exploding (VE) forward process — amorphous recipe
+# --------------------------------------------------------------------------- #
+def uniform_init(n_atoms: int, cell: torch.Tensor,
+                 generator: torch.Generator | None = None,
+                 device: torch.device | str = "cpu",
+                 dtype: torch.dtype = torch.float32) -> torch.Tensor:
+    """Atoms uniformly distributed in the cell (fractional coords ~ U(0,1)).
+
+    This is the VE prior: it already fills the box at the right density, so the
+    diffusion only has to fix *local* order — unlike the VP Gaussian blob, which
+    concentrates atoms in the center and collapses.
+    """
+    frac = torch.rand(n_atoms, 3, generator=generator, device=device, dtype=dtype)
+    return frac @ cell.to(dtype)
+
+
+def ve_add_noise(positions: torch.Tensor, sigma: torch.Tensor, cell: torch.Tensor,
+                 generator: torch.Generator | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    """Additive VE noising at physical (Angstrom) scale: x_sigma = x0 + sigma * eps.
+
+    eps is CoM-free (translation-invariant, matching the equivariant denoiser).
+    Returns (x_sigma, eps). No coordinate normalization — we work in real Angstrom.
+    """
+    eps = com_free_noise(positions.shape[0], cell, generator=generator,
+                         device=positions.device, dtype=positions.dtype)
+    return positions + sigma * eps, eps

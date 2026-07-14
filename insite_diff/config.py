@@ -98,17 +98,29 @@ class MaskConfig:
 
 @dataclass
 class DiffusionConfig:
-    type: str = "vp"                # variance-preserving (DDPM); documented choice
+    # "vp": variance-preserving DDPM (milestone-1; collapses on amorphous — see history).
+    # "ve": variance-exploding, annealed-Langevin score model, uniform-in-cell prior,
+    #       small physical noise (the amorphous-materials recipe, npj Comp Mater 2025).
+    type: str = "vp"
+    # --- VP (DDPM) params ---
     timesteps: int = 1000
     beta_schedule: str = "cosine"   # cosine | linear
+    loss_weighting: str = "uniform"  # uniform | min_snr
+    min_snr_gamma: float = 5.0
+    # --- VE (score / annealed Langevin) params, Angstrom scale ---
+    sigma_min: float = 0.01         # smallest noise level (A)
+    sigma_max: float = 0.75         # largest noise level (A) — small; never fully destroys structure
+    n_sigma_levels: int = 100       # geometric ladder length
+    langevin_steps: int = 10        # Langevin steps per sigma level
+    langevin_step_lr: float = 2.0e-5  # NCSN base step size (scaled by (sigma/sigma_min)^2)
+    refine_steps: int = 100         # final no-external-noise refinement at sigma_min
+    # --- shared ---
     com_free: bool = True
     pbc_aware: bool = True
-    loss_weighting: str = "uniform"  # uniform | min_snr
-    min_snr_gamma: float = 5.0       # min-SNR-gamma (Hang 2023); down-weights easy low-noise steps
 
     def __post_init__(self) -> None:
-        if self.type != "vp":
-            raise ValueError("milestone one uses VP diffusion only")
+        if self.type not in ("vp", "ve"):
+            raise ValueError(f"diffusion.type must be vp|ve, got {self.type!r}")
         if self.loss_weighting not in ("uniform", "min_snr"):
             raise ValueError(f"loss_weighting must be uniform|min_snr, got {self.loss_weighting!r}")
 

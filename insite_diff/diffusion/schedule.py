@@ -78,3 +78,35 @@ class VPSchedule:
         """Gather per-sample coefficients and shape them to (B, 1, 1) for broadcasting."""
         out = buf.to(torch.float32)[t]
         return out.view(-1, *([1] * 2))
+
+
+class VESchedule:
+    """Variance-exploding noise ladder for score-based / annealed-Langevin diffusion.
+
+    A geometric sequence of noise levels sigma from sigma_max (index 0) down to
+    sigma_min (index -1), in Angstrom. Small max sigma keeps the forward process in
+    the physically-meaningful local-perturbation regime (no full destruction), and
+    the model is conditioned on log(sigma).
+    """
+
+    def __init__(self, sigma_min: float, sigma_max: float, n_levels: int):
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+        self.n_levels = n_levels
+        # high -> low, geometric
+        self.sigmas = torch.exp(torch.linspace(
+            torch.log(torch.tensor(sigma_max)), torch.log(torch.tensor(sigma_min)), n_levels))
+
+    def to(self, device: torch.device | str) -> "VESchedule":
+        self.sigmas = self.sigmas.to(device)
+        return self
+
+    def sample_sigma(self, generator: torch.Generator | None = None) -> torch.Tensor:
+        """Random noise level from the ladder (for training)."""
+        idx = torch.randint(0, self.n_levels, (1,), generator=generator, device=self.sigmas.device)
+        return self.sigmas[idx]
+
+    def cond(self, sigma: torch.Tensor) -> torch.Tensor:
+        """Map sigma -> [0,1] conditioning scalar via normalized log(sigma)."""
+        lo, hi = torch.log(torch.tensor(self.sigma_min)), torch.log(torch.tensor(self.sigma_max))
+        return ((torch.log(sigma) - lo) / (hi - lo)).clamp(0, 1).to(sigma.device)
