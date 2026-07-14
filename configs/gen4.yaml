@@ -1,0 +1,82 @@
+# gen4: CONFINEMENT ABLATION (a diagnostic, not the end solution).
+# The oracle test proved the Cartesian-VP formulation is correct, so the gen2/gen3
+# failure is learnability, not the process. gen4 isolates ONE variable: drop the
+# 80-atom cells whose box is smaller than the receptive field, and use the 640
+# headroom for a larger RF. This tests whether the small-cell mixing is implicated.
+#
+# NOTE: this is NOT a viable end-state -- the real target (surfaces) is also
+# in-plane-confined (x=y~10 A), so small confined cells must ultimately be solved
+# properly (fractional / MatterGen-style), which we evaluate next regardless of
+# this outcome.
+seed: 0
+device: auto
+
+data:
+  sources:
+    - {path: /Users/matt/Desktop/data/in2o3/640.extxyz, role: train_val}   # 640 ONLY (no 80)
+  traj_id_regex: 'config_type=(\S+)'
+  species: [In, O]
+  stride: 1
+  dedup_rmsd: 0.05
+
+split:
+  by: trajectory
+  val_fraction: 0.2
+  val_source_roles: [train_val]
+  seed: 0
+
+graph:
+  cutoff: 5.0                     # RF = cutoff * n_layers = 10 A < box/2 (10.13 A on 640): clean, no wrap
+  max_neighbors: 40
+
+mask:
+  mask_frac: 0.10
+  geometry: sphere
+  center: box_center
+  slab_axis: 2
+  slab_side: top
+
+diffusion:
+  type: vp
+  timesteps: 1000
+  beta_schedule: cosine
+  com_free: true
+  pbc_aware: true
+  loss_weighting: uniform         # drop min-SNR: it was not the lever (gen2 uniform failed the same way)
+  min_snr_gamma: 5.0
+
+model:                            # moderate (~1M params); 8M didn't help and overfits 32 structures
+  name: e3nn_denoiser
+  n_layers: 2
+  hidden_irreps: "64x0e + 32x1o + 16x2e"
+  sh_lmax: 3
+  radial_basis: 10
+  sigma_embed_dim: 32
+
+train:
+  batch_size: 4
+  lr: 1.0e-3
+  max_steps: 150000
+  ema_decay: 0.999
+  loss: eps_mse
+  checkpoint_dir: checkpoints/gen4
+  ckpt_every: 5000
+  log_dir: runs/gen4
+  log_every: 50
+  val_every: 1000
+
+sampling:
+  num_steps: 1000
+  n_resample: 8
+  n_samples: 8
+
+mace:
+  model_path: /Users/matt/Desktop/data/in2o3/scan_v3_swa.model
+  relax_fmax: 0.05
+  relax_steps: 200
+
+validation:
+  rdf_rmax: 6.0
+  rdf_bins: 240
+  cn_cutoff_ino: 2.7
+  tolerances: {rdf_peak_A: 0.1, mean_bond_A: 0.05}
