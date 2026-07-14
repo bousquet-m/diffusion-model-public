@@ -33,3 +33,6 @@ venv/
 *.swp
 .vscode/
 .idea/
+
+# Local Claude Code settings (machine-specific paths, personal perms)
+.claude/settings.local.json
