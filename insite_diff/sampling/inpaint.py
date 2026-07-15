@@ -21,9 +21,10 @@ import numpy as np
 import torch
 
 from ..data.graph import build_graph_torch
-from ..diffusion.noising import (draw_randn, min_image, pbc_center, q_sample,
-                                 structure_scale)
-from ..diffusion.schedule import VPSchedule
+from ..diffusion.noising import (com_free_noise, draw_randn, min_image, pbc_center,
+                                 q_sample, structure_scale, uniform_init)
+from ..diffusion.sampler import _wrap
+from ..diffusion.schedule import VESchedule, VPSchedule
 
 
 def _subset_com_free_noise(mask: torch.Tensor, device, dtype, generator=None) -> torch.Tensor:
@@ -121,3 +122,74 @@ def inpaint(
     frac = positions_out @ inv
     positions_out = (frac - torch.floor(frac)) @ cell
     return positions_out
+
+
+# --------------------------------------------------------------------------- #
+# VE (amorphous recipe) inpainting — RePaint in annealed Langevin
+# --------------------------------------------------------------------------- #
+@torch.no_grad()
+def ve_inpaint(schedule: VESchedule, model, positions: torch.Tensor, cell: torch.Tensor,
+               types: torch.Tensor, mobile_mask: torch.Tensor, cutoff: float,
+               max_neighbors: int, langevin_steps: int, step_lr: float, refine_steps: int,
+               generator: torch.Generator | None = None, device="cpu") -> torch.Tensor:
+    """Clamp context, generate mobile via annealed Langevin.
+
+    In physical Cartesian coordinates (no normalized frame), so context atoms are
+    simply held at their known positions (re-noised to the current sigma each step,
+    RePaint-style); no CoM realignment is needed. mask_frac=1.0 (empty context)
+    reduces to unconditional annealed_langevin.
+    """
+    positions = positions.to(device)
+    cell = cell.to(device)
+    types = types.to(device)
+    mobile_mask = mobile_mask.to(device)
+    context = ~mobile_mask
+    n, dtype = positions.shape[0], positions.dtype
+    sigmas = schedule.sigmas.to(device)
+    sigma_min = sigmas[-1]
+
+    def predict_eps(x, sigma):
+        g = build_graph_torch(x, cell, cutoff, max_neighbors=max_neighbors)
+        return model(types, g.edge_index, g.edge_vec, schedule.cond(sigma), n)
+
+    def clamp_context(x, sigma):
+        if context.any():
+            eps_c = com_free_noise(n, generator=generator, device=device, dtype=dtype)
+            x = x.clone()
+            x[context] = positions[context] + sigma * eps_c[context]
+        return x
+
+    x = uniform_init(n, cell, generator=generator, device=device, dtype=dtype)
+    x = clamp_context(x, sigmas[0])
+    for sigma in sigmas:
+        step = step_lr * (sigma / sigma_min) ** 2
+        for _ in range(langevin_steps):
+            eps_hat = predict_eps(x, sigma)
+            z = com_free_noise(n, generator=generator, device=device, dtype=dtype)
+            x = x + step * (-eps_hat / sigma) + torch.sqrt(2 * step) * z
+            x = clamp_context(x, sigma)          # RePaint: re-noised known context
+            x = _wrap(x, cell)
+    for _ in range(refine_steps):                # final refine, context exact
+        eps_hat = predict_eps(x, sigma_min)
+        x = x + step_lr * (-eps_hat / sigma_min)
+        if context.any():
+            x = x.clone()
+            x[context] = positions[context]
+        x = _wrap(x, cell)
+    return x
+
+
+def inpaint_dispatch(cfg, model, positions, cell, types, mobile_mask, device,
+                     generator=None) -> torch.Tensor:
+    """Run the inpainting sampler for the configured diffusion type (vp|ve)."""
+    d = cfg.diffusion
+    if d.type == "ve":
+        sched = VESchedule(d.sigma_min, d.sigma_max, d.n_sigma_levels).to(device)
+        return ve_inpaint(sched, model, positions, cell, types, mobile_mask,
+                          cfg.graph.cutoff, cfg.graph.max_neighbors,
+                          d.langevin_steps, d.langevin_step_lr, d.refine_steps,
+                          generator=generator, device=device)
+    sched = VPSchedule(d.timesteps, d.beta_schedule).to(device)
+    return inpaint(sched, model, positions, cell, types, mobile_mask,
+                   cutoff=cfg.graph.cutoff, max_neighbors=cfg.graph.max_neighbors,
+                   device=device, generator=generator, n_resample=cfg.sampling.n_resample)

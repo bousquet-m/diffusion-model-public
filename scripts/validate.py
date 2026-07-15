@@ -31,8 +31,7 @@ from insite_diff.analysis.rdf import all_partials, first_peak, partial_rdf
 from insite_diff.config import load_config
 from insite_diff.data.dataset import build_datasets
 from insite_diff.data.mask import partition
-from insite_diff.diffusion.schedule import VPSchedule
-from insite_diff.sampling.inpaint import inpaint
+from insite_diff.sampling.inpaint import inpaint_dispatch
 from insite_diff.training.trainer import load_model
 from insite_diff.utils import seed_everything, select_device
 
@@ -43,7 +42,7 @@ def make_atoms(numbers, positions, cell) -> Atoms:
     return Atoms(numbers=numbers, positions=positions, cell=cell, pbc=True)
 
 
-def generate(cfg, model, schedule, val_ds, n, device):
+def generate(cfg, model, val_ds, n, device):
     """Inpaint n held-out structures; return (generated, reference) Atoms lists + masks."""
     rng = np.random.default_rng(cfg.seed)
     gen_frames, ref_frames, masks = [], [], []
@@ -51,11 +50,8 @@ def generate(cfg, model, schedule, val_ds, n, device):
         item = val_ds[i]
         pos, cell = item["positions"], item["cell"]
         mobile = partition(pos.numpy(), cell.numpy(), cfg.mask, rng)
-        out = inpaint(schedule, model, pos, cell, item["types"], torch.tensor(mobile),
-                      cutoff=cfg.graph.cutoff, max_neighbors=cfg.graph.max_neighbors,
-                      device=device,
-                      generator=torch.Generator(device="cpu").manual_seed(cfg.seed + i),
-                      n_resample=cfg.sampling.n_resample)
+        out = inpaint_dispatch(cfg, model, pos, cell, item["types"], torch.tensor(mobile),
+                               device, generator=torch.Generator(device="cpu").manual_seed(cfg.seed + i))
         numbers = item["numbers"].numpy()
         gen_frames.append(make_atoms(numbers, out.cpu().numpy(), cell.numpy()))
         ref_frames.append(make_atoms(numbers, pos.numpy(), cell.numpy()))
@@ -145,11 +141,10 @@ def main():
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     model, _, _ = load_model(args.checkpoint, device=device, use_ema=not args.no_ema)
-    schedule = VPSchedule(cfg.diffusion.timesteps, cfg.diffusion.beta_schedule).to(device)
     _, val_ds, split = build_datasets(cfg)
     print(f"[validate] {len(val_ds)} held-out frames / {len(split.val_traj_ids)} trajectories")
 
-    gen_frames, ref_frames, masks = generate(cfg, model, schedule, val_ds, args.n, device)
+    gen_frames, ref_frames, masks = generate(cfg, model, val_ds, args.n, device)
     report = {"n_structures": len(gen_frames),
               "structural": structural_report(cfg, gen_frames, ref_frames, masks, out_dir)}
 

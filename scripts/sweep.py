@@ -37,7 +37,7 @@ from insite_diff.data.mask import partition
 from insite_diff.diffusion.noising import structure_scale
 from insite_diff.diffusion.sampler import sample as sample_unconditional
 from insite_diff.diffusion.schedule import VPSchedule
-from insite_diff.sampling.inpaint import inpaint
+from insite_diff.sampling.inpaint import inpaint_dispatch
 from insite_diff.training.trainer import load_model
 from insite_diff.utils import seed_everything, select_device
 
@@ -49,8 +49,9 @@ def _atoms(numbers, positions, cell):
     return Atoms(numbers=numbers, positions=positions, cell=cell, pbc=True)
 
 
-def _generate_full(cfg, model, schedule, cell, types, n_atoms, device, seed):
-    """Pure unconditional generation (mask_frac == 1.0, no context)."""
+def _generate_full_vp(cfg, model, cell, types, n_atoms, device, seed):
+    """VP pure unconditional generation (mask_frac == 1.0, no context)."""
+    schedule = VPSchedule(cfg.diffusion.timesteps, cfg.diffusion.beta_schedule).to(device)
     s = structure_scale(cell)
 
     def predict(z_t, t):
@@ -64,33 +65,35 @@ def _generate_full(cfg, model, schedule, cell, types, n_atoms, device, seed):
                                 device=device)
 
 
-def _seeds_for_structure(cfg, model, schedule, item, mask_frac, device, n_seeds):
-    """n_seeds generated samples of ONE masked structure; returns (samples, mobile_mask)."""
+def _seeds_for_structure(cfg, model, item, mask_frac, device, n_seeds):
+    """n_seeds generated samples of ONE masked structure; returns (samples, mobile_mask).
+
+    Uses inpaint_dispatch (vp|ve). For VE, mask_frac=1.0 reduces to unconditional
+    annealed Langevin (empty context). For VP, mask_frac=1.0 uses the sampler.
+    """
     pos, cell, types = item["positions"], item["cell"], item["types"]
-    numbers = item["numbers"].numpy()
     n = pos.shape[0]
-    mask_cfg = dataclasses.replace(cfg.mask, mask_frac=mask_frac)
 
     if mask_frac >= 1.0:
         mobile = np.ones(n, dtype=bool)
-        gen = [_generate_full(cfg, model, schedule, cell.to(device), types.to(device), n,
-                              device, seed=cfg.seed + s).cpu().numpy() for s in range(n_seeds)]
+        if cfg.diffusion.type == "ve":
+            gen = [inpaint_dispatch(cfg, model, pos, cell, types, torch.tensor(mobile), device,
+                                    generator=torch.Generator(device="cpu").manual_seed(cfg.seed + s)
+                                    ).cpu().numpy() for s in range(n_seeds)]
+        else:
+            gen = [_generate_full_vp(cfg, model, cell.to(device), types.to(device), n,
+                                     device, seed=cfg.seed + s).cpu().numpy() for s in range(n_seeds)]
         return gen, mobile
 
     rng = np.random.default_rng(cfg.seed)          # same mask across seeds
-    mobile = partition(pos.numpy(), cell.numpy(), mask_cfg, rng)
-    gen = []
-    for s in range(n_seeds):
-        out = inpaint(schedule, model, pos, cell, types, torch.tensor(mobile),
-                      cutoff=cfg.graph.cutoff, max_neighbors=cfg.graph.max_neighbors,
-                      device=device,
-                      generator=torch.Generator(device="cpu").manual_seed(cfg.seed + s),
-                      n_resample=cfg.sampling.n_resample)
-        gen.append(out.cpu().numpy())
+    mobile = partition(pos.numpy(), cell.numpy(), dataclasses.replace(cfg.mask, mask_frac=mask_frac), rng)
+    gen = [inpaint_dispatch(cfg, model, pos, cell, types, torch.tensor(mobile), device,
+                            generator=torch.Generator(device="cpu").manual_seed(cfg.seed + s)
+                            ).cpu().numpy() for s in range(n_seeds)]
     return gen, mobile
 
 
-def run_fraction(cfg, model, schedule, val_ds, mask_frac, device, args, train_desc):
+def run_fraction(cfg, model, val_ds, mask_frac, device, args, train_desc):
     rmax, nbins, cn = cfg.validation.rdf_rmax, cfg.validation.rdf_bins, cfg.validation.cn_cutoff_ino
     gen_frames, ref_frames, masks = [], [], []
     spreads = []
@@ -98,7 +101,7 @@ def run_fraction(cfg, model, schedule, val_ds, mask_frac, device, args, train_de
         item = val_ds[i]
         numbers = item["numbers"].numpy()
         cell = item["cell"].numpy()
-        samples, mobile = _seeds_for_structure(cfg, model, schedule, item, mask_frac, device, args.n_seeds)
+        samples, mobile = _seeds_for_structure(cfg, model, item, mask_frac, device, args.n_seeds)
         spreads.append(similarity.multi_seed_spread(samples, numbers, item["cell"].numpy(), mobile)["mean_rmsd"])
         for sp in samples:
             gen_frames.append(_atoms(numbers, sp, cell))
@@ -166,7 +169,6 @@ def main():
     fractions = [float(x) for x in args.fractions.split(",")]
 
     model, _, _ = load_model(args.checkpoint, device=device, use_ema=not args.no_ema)
-    schedule = VPSchedule(cfg.diffusion.timesteps, cfg.diffusion.beta_schedule).to(device)
     train_ds, val_ds, split = build_datasets(cfg)
     print(f"[sweep] {len(val_ds)} held-out frames / {len(split.val_traj_ids)} trajectories; "
           f"ladder={fractions}")
@@ -181,7 +183,7 @@ def main():
     results = []
     for frac in fractions:
         print(f"[sweep] mask_frac = {frac}")
-        res = run_fraction(cfg, model, schedule, val_ds, frac, device, args, train_desc)
+        res = run_fraction(cfg, model, val_ds, frac, device, args, train_desc)
         results.append(res)
         with open(os.path.join(args.out, f"summary_{frac}.json"), "w") as f:
             json.dump(res, f, indent=2)

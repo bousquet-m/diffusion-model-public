@@ -21,8 +21,7 @@ from ase.io import write
 from insite_diff.config import load_config
 from insite_diff.data.dataset import build_datasets
 from insite_diff.data.mask import partition
-from insite_diff.diffusion.schedule import VPSchedule
-from insite_diff.sampling.inpaint import inpaint
+from insite_diff.sampling.inpaint import inpaint_dispatch
 from insite_diff.training.trainer import load_model
 from insite_diff.utils import seed_everything, select_device
 
@@ -48,8 +47,6 @@ def main():
     Path(args.out).mkdir(parents=True, exist_ok=True)
 
     model, ckpt_cfg, _ = load_model(args.checkpoint, device=device, use_ema=not args.no_ema)
-    schedule = VPSchedule(cfg.diffusion.timesteps, cfg.diffusion.beta_schedule).to(device)
-
     _, val_ds, split = build_datasets(cfg)
     if len(val_ds) == 0:
         raise SystemExit("no validation structures available to inpaint")
@@ -64,10 +61,8 @@ def main():
         mobile = partition(pos.numpy(), cell.numpy(), cfg.mask, rng)
         mobile_t = torch.tensor(mobile)
 
-        out = inpaint(schedule, model, pos, cell, item["types"], mobile_t,
-                      cutoff=cfg.graph.cutoff, max_neighbors=cfg.graph.max_neighbors,
-                      device=device, generator=torch.Generator(device="cpu").manual_seed(cfg.seed + i),
-                      n_resample=cfg.sampling.n_resample)
+        out = inpaint_dispatch(cfg, model, pos, cell, item["types"], mobile_t, device,
+                               generator=torch.Generator(device="cpu").manual_seed(cfg.seed + i))
 
         numbers = item["numbers"].numpy()
         gen = to_atoms(numbers, out.cpu().numpy(), cell.numpy(), mobile)
