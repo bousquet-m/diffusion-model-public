@@ -121,6 +121,32 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
 - `insite_diff/e3nn_compat.py` — `add_safe_globals([slice])` so e3nn 0.4.4 imports under
   torch ≥2.6 (import before any e3nn use).
 
+## Key Papers & References
+- **A Generative Diffusion Model for Amorphous Materials** — arXiv:2507.05024, npj Comput.
+  Mater. 2025. **THE recipe we are now implementing (gen5/VE).** Variance-exploding,
+  annealed-Langevin score model, **uniform-in-cell prior**, small physical noise
+  (σ ≤ 0.75 Å), customized **NequIP** denoiser; validated on silica glass with ~24 training
+  structures. Key tricks: external noise during denoising is "essential"; short MACE/MD
+  post-refinement. Their code builds on **LLNL/graphite** (github.com/LLNL/graphite).
+- **NCSN — "Generative Modeling by Estimating Gradients of the Data Distribution"** (Song &
+  Ermon, NeurIPS 2019). The score-matching + **annealed Langevin** method our VE sampler
+  (`annealed_langevin` in `sampler.py`) follows; step size ∝ σ².
+- **DDPM — "Denoising Diffusion Probabilistic Models"** (Ho et al., 2020). The VP framework
+  behind gen1–gen4 (now a dead end for this problem).
+- **RePaint** (Lugmayr et al., CVPR 2022, arXiv:2201.09865). The inpainting-by-masking scheme
+  our `inpaint`/`ve_inpaint` implement (clamp context, re-noise each reverse step).
+- **CHGGen** — host-guided inpainting; the original project brief modeled our context
+  clamping on it.
+- **NequIP** (Batzner et al., Nat. Commun. 2022) + the **e3nn** library — the E(3)-equivariant
+  message-passing architecture family for `E3Denoiser`.
+- **min-SNR-γ** (Hang et al., 2023, arXiv:2303.09556) — loss weighting tried in gen3 (dead end).
+- **DiffCSP** (Jiao et al., NeurIPS 2023, github.com/jiaor17/DiffCSP) and **MatterGen**
+  (Microsoft, github.com/microsoft/mattergen) — fractional-coordinate / crystalline diffusion.
+  **Assessed and rejected** (crystalline ≤20-atom cells, whole-structure, no inpainting,
+  pretraining won't transfer to amorphous). See Dead Ends.
+- **Crystal structure prediction with host-guided inpainting + foundation potentials** —
+  arXiv:2504.16893 (came up in the lit search on inpainting-style generation).
+
 ## Environment / logistics
 - Python env (Mac dev): `/opt/anaconda3/envs/insite-diff/bin/python`; run with `PYTHONPATH=.`
   and `export PYTORCH_ENABLE_MPS_FALLBACK=1`. MPS unavailable → CPU on the Mac.
