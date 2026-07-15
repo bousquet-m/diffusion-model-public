@@ -14,8 +14,8 @@ from typing import Callable
 
 import torch
 
-from .noising import com_free_noise, denormalize
-from .schedule import VPSchedule
+from .noising import com_free_noise, denormalize, uniform_init
+from .schedule import VESchedule, VPSchedule
 
 PredictNoise = Callable[[torch.Tensor, int], torch.Tensor]
 
@@ -65,3 +65,59 @@ def sample(
             traj.append(z_t.clone())
     positions = denormalize(z_t, com, scale, cell, wrap=True)
     return (positions, traj) if return_traj else positions
+
+
+# --------------------------------------------------------------------------- #
+# VE annealed Langevin sampling (amorphous recipe)
+# --------------------------------------------------------------------------- #
+PredictEps = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]  # (x, sigma) -> eps_hat
+
+
+def _wrap(pos: torch.Tensor, cell: torch.Tensor) -> torch.Tensor:
+    cell = cell.to(pos.dtype)
+    frac = pos @ torch.linalg.inv(cell)
+    return (frac - torch.floor(frac)) @ cell
+
+
+@torch.no_grad()
+def annealed_langevin(
+    schedule: VESchedule,
+    predict_eps: PredictEps,
+    n_atoms: int,
+    cell: torch.Tensor,
+    langevin_steps: int = 10,
+    step_lr: float = 2.0e-5,
+    refine_steps: int = 100,
+    generator: torch.Generator | None = None,
+    device: torch.device | str = "cpu",
+    x_init: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """NCSN annealed Langevin from a uniform-in-cell prior.
+
+    ``predict_eps(x, sigma)`` returns the CoM-free noise estimate; the score is
+    ``-eps_hat / sigma``. For each sigma (high->low) we take ``langevin_steps``
+    Langevin steps with step size ``step_lr * (sigma/sigma_min)^2`` and external
+    CoM-free noise, then a final ``refine_steps`` at sigma_min without external
+    noise. Positions are wrapped into the cell (PBC) each step.
+    """
+    cell = cell.to(device)
+    x = uniform_init(n_atoms, cell, generator=generator, device=device, dtype=cell.dtype) \
+        if x_init is None else x_init.to(device)
+    sigmas = schedule.sigmas.to(device)
+    sigma_min = sigmas[-1]
+
+    def langevin(x, sigma, add_noise):
+        step = step_lr * (sigma / sigma_min) ** 2
+        eps_hat = predict_eps(x, sigma)
+        x = x + step * (-eps_hat / sigma)
+        if add_noise:
+            z = com_free_noise(n_atoms, generator=generator, device=device, dtype=x.dtype)
+            x = x + torch.sqrt(2 * step) * z
+        return _wrap(x, cell)
+
+    for sigma in sigmas:
+        for _ in range(langevin_steps):
+            x = langevin(x, sigma, add_noise=True)
+    for _ in range(refine_steps):
+        x = langevin(x, sigma_min, add_noise=False)
+    return x

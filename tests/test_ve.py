@@ -4,8 +4,10 @@ import math
 import numpy as np
 import torch
 
-from insite_diff.diffusion.noising import ve_add_noise, uniform_init
+from insite_diff.diffusion.noising import min_image, ve_add_noise, uniform_init
+from insite_diff.diffusion.sampler import annealed_langevin
 from insite_diff.diffusion.schedule import VESchedule
+from insite_diff.geometry import rmsd_same_atoms
 
 
 def test_sigma_ladder_is_geometric_high_to_low():
@@ -47,3 +49,31 @@ def test_ve_noise_is_additive_com_free_and_physical_scale():
     # displacement scale ~ sigma (physical Angstrom), not unit-normalized
     disp = (x_sigma - x0).norm(dim=1)
     assert 0.3 < disp.mean().item() < 1.5      # ~sigma * sqrt(3-ish), O(Angstrom)
+
+
+def test_annealed_langevin_output_in_box():
+    cell = torch.eye(3) * 15.0
+    def zero(x, sigma):
+        return torch.zeros_like(x)
+    out = annealed_langevin(VESchedule(0.01, 0.5, 10), zero, 30, cell,
+                            langevin_steps=2, refine_steps=5,
+                            generator=torch.Generator().manual_seed(0))
+    assert out.shape == (30, 3)
+    frac = out @ torch.linalg.inv(cell)
+    assert frac.min() >= -1e-4 and frac.max() <= 1 + 1e-4
+
+
+def test_annealed_langevin_oracle_reconstructs():
+    """With the true eps (perfect score), Langevin from a uniform prior must
+    recover the real structure — validates the VE sampler/formulation."""
+    torch.manual_seed(0)
+    cell = torch.eye(3, dtype=torch.float64) * 12.0
+    x0 = torch.rand(24, 3, dtype=torch.float64) @ cell
+    sched = VESchedule(0.01, 0.5, 80)
+
+    def oracle(x, sigma):
+        return min_image(x - x0, cell) / sigma
+
+    out = annealed_langevin(sched, oracle, 24, cell, langevin_steps=12, step_lr=2e-5,
+                            refine_steps=120, generator=torch.Generator().manual_seed(0))
+    assert rmsd_same_atoms(out.numpy(), x0.numpy(), cell.numpy()) < 0.3
