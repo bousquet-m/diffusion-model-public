@@ -1,0 +1,78 @@
+# gen5: the VE (amorphous) recipe — first real run of the reformulated model.
+#   variance-exploding, annealed-Langevin score model, uniform-in-cell prior,
+#   small physical noise (npj Comp Mater 2025 recipe). The oracle test shows this
+#   eliminates the VP blob collapse that killed gen2/gen3.
+# 640-only for a clean first test (single cell size, RF 10 < box/2 = 10.13). VE
+# handles confinement fine (per the paper), so 80/surfaces come next.
+seed: 0
+device: auto
+
+data:
+  sources:
+    - {path: /Users/matt/Desktop/data/in2o3/640.extxyz, role: train_val}
+  traj_id_regex: 'config_type=(\S+)'
+  species: [In, O]
+  stride: 1
+  dedup_rmsd: 0.05
+
+split:
+  by: trajectory
+  val_fraction: 0.2
+  val_source_roles: [train_val]
+  seed: 0
+
+graph:
+  cutoff: 5.0                      # RF = cutoff * n_layers = 10 A < box/2 (10.13 A on 640)
+  max_neighbors: 40
+
+mask:
+  mask_frac: 0.10
+  geometry: sphere
+  center: box_center
+  slab_axis: 2
+  slab_side: top
+
+diffusion:
+  type: ve
+  sigma_min: 0.01                  # A
+  sigma_max: 0.75                  # A — small; never fully destroys the structure
+  n_sigma_levels: 500              # ladder length (training samples levels; sampling anneals)
+  langevin_steps: 5                # per level at sampling -> 500*5 = 2500 anneal steps
+  langevin_step_lr: 2.0e-5
+  refine_steps: 100                # final no-external-noise refinement
+
+model:                            # moderate (~1M params), NequIP-like (paper: 64 scalar + 32 vector)
+  name: e3nn_denoiser
+  n_layers: 2
+  hidden_irreps: "64x0e + 32x1o + 8x2e"
+  sh_lmax: 2
+  radial_basis: 8
+  sigma_embed_dim: 32
+
+train:
+  batch_size: 4
+  lr: 1.0e-3
+  max_steps: 150000
+  ema_decay: 0.999
+  loss: dsm
+  checkpoint_dir: checkpoints/gen5
+  ckpt_every: 5000
+  log_dir: runs/gen5
+  log_every: 50
+  val_every: 1000
+
+sampling:
+  num_steps: 1000
+  n_resample: 8
+  n_samples: 8
+
+mace:
+  model_path: /Users/matt/Desktop/data/in2o3/scan_v3_swa.model
+  relax_fmax: 0.05
+  relax_steps: 200
+
+validation:
+  rdf_rmax: 6.0
+  rdf_bins: 240
+  cn_cutoff_ino: 2.7
+  tolerances: {rdf_peak_A: 0.1, mean_bond_A: 0.05}
