@@ -56,8 +56,25 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
   revisited, not designed around).
 - **Model is unconditional; inpainting is sampling-time only** (RePaint). One trained model
   serves any mask, including `mask_frac=1.0` (pure generation).
+- **SWEEP FOOTGUN — `--config` must match the checkpoint's diffusion type.** `sweep.py:171`
+  does `model, _, _ = load_model(...)`: the *architecture* is rebuilt from the checkpoint
+  (correct), but the **checkpoint's config is discarded**, and `inpaint_dispatch(cfg, ...)`
+  reads `diffusion.type` from the `--config` file. Passing a `vp` config with a `ve`
+  checkpoint therefore runs the **DDPM sampler on a VE model** (t/T conditioning into a
+  network trained on normalized log-σ) — silent garbage, no error. Always sweep gen5 with
+  `--config configs/gen5.yaml`, gen6 with `configs/gen6.yaml`. Worth hardening: prefer the
+  checkpoint's `diffusion.type` and error on mismatch.
 - **Validation must be MOBILE-atom-restricted.** All-atom stats are dominated by frozen
   context and cannot fail — this was a real bug we fixed in 1b.
+- **`model.tp_mode: fc|uvu` — the message tensor product.** gen1–gen5 used
+  `FullyConnectedTensorProduct(..., shared_weights=False)`, so the radial net emitted a full
+  uvw block **per edge**: 16,064 weights/edge → ~1.6 GB of weights materialized per layer per
+  forward, and `Linear(32→16064)` alone was 531k of the 1.08M params. Despite the docstring,
+  **that is not what NequIP does** — NequIP uses `uvu` (per-path weights, 352/edge, + a
+  Linear mix). Measured at gen5 irreps, CPU, 640 atoms: **fwd 14080→250 ms (56×), fwd+bwd
+  76769→734 ms (105×)**. This is the cause of both the 20 h train and the 4 h sweep.
+  **Default is `fc` so pre-gen6 checkpoints (config predates the key) still load** — `uvu`
+  changes the architecture, so gen5 checkpoints are NOT loadable as uvu. New configs opt in.
 
 ## Dead Ends (do not repeat)
 - **VP/DDPM with Gaussian prior + unit-variance coordinate normalization + cosine schedule.**
@@ -71,13 +88,34 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
 - **Blaming confinement (small 80-atom box)** — the oracle test says the fix is the
   formulation, not confinement; MatterGen handles small cells fine. gen4 tests this anyway.
 
+## gen5 RESULTS (training done, 150k steps, 20 h on A100)
+- **VE learned — the VP dead zone is gone.** `diagnose.py` on `final.pt` (640 frame):
+  `cos` peaks 0.886 at σ=0.218 and `x0_RMSD` is small at EVERY σ (1.105 Å at σ_max down to
+  0.017 Å at σ_min). Contrast gen2/gen3: `cos≈0`, `MSE≈1`, `ratio≈0`. **The reformulation
+  worked.** Physical verdict (sweep) still open.
+- **Low-σ falloff is benign, not failure.** At σ≤0.03 the injected noise is below the MD
+  thermal rattle, so the true score really is ~0 (`MSE→0.966` = correctly predicting
+  nothing); `x0_RMSD` there is 0.017 Å. Do not "fix" this.
+- **σ_max is the weak end**: `cos` 0.53, ratio 0.546 (under-predicts ~2×) — and diagnose is
+  *optimistic* there, since it feeds `real structure + 0.75 Å noise` while the sampler
+  starts from `uniform_init` (much further off-manifold). Watch this if sampling fails.
+- **Converged by ~10-20k of 150k steps.** diagnose on step_10000/20000/45000/final is flat
+  to within 4-draw noise at every σ (σ_max cos: 0.499/0.530/0.537/0.530 — step_45000 is
+  *marginally above* final). ~14 h of the 20 h run bought nothing.
+
 ## Next Steps (ordered)
-1. **Watch gen5 training** (cluster). At `checkpoints/gen5/step_20000.pt`, run
-   `scripts/diagnose.py` (auto-detects VE). **Success = `cos` high and `x0_RMSD` small at
-   ALL σ (no dead zone).** This is the fast verdict — independent of Langevin sampling params.
-2. **If diagnose is good, run `scripts/sweep.py`** on the gen5 checkpoint (add `--mace`) for
-   the physical verdict: mobile In-O RDF/coordination/bond and before/after-relax energies.
-   Compare to the gen2/gen3 sweep failure (bond ~2.02 vs ref 2.19, energies ~−10⁹).
+1. **Train gen6** (`configs/gen6.yaml`): gen5's recipe + the `tp_mode: uvu` fix + 30k steps.
+   Then `diagnose.py` on it and compare to the gen5 table above — same irreps, so the
+   comparison isolates the tp_mode effect. **Note gen6 is 74,656 params vs gen5's 1,079,520**
+   (the FC radial net was 531k of pure weight-emission overhead). If diagnose regresses vs
+   gen5, spend the freed budget on `hidden_irreps`/`n_layers` — that is the moment to do it,
+   not before.
+2. **Run `scripts/sweep.py`** (add `--mace`) for the physical verdict: mobile In-O
+   RDF/coordination/bond and before/after-relax energies. Compare to the gen2/gen3 sweep
+   failure (bond ~2.02 vs ref 2.19, energies ~−10⁹). NB the sweep is 7 fractions × 3
+   structures × 10 seeds × 2600 forwards = **546k sequential single-structure forwards** —
+   that, not MACE, is why it takes ~4 h. gen5 checkpoints are `fc` and get no speedup;
+   only a gen6 (uvu) model does.
 3. **If sampling under/over-shoots** (structure right but energies off), tune the Langevin
    knobs in `gen5.yaml` `diffusion:` — `langevin_step_lr`, `langevin_steps`, `refine_steps`
    (NCSN defaults; `annealed_langevin` in `insite_diff/diffusion/sampler.py`). Diagnose
@@ -151,9 +189,20 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
 - Python env (Mac dev): `/opt/anaconda3/envs/insite-diff/bin/python`; run with `PYTHONPATH=.`
   and `export PYTORCH_ENABLE_MPS_FALLBACK=1`. MPS unavailable → CPU on the Mac.
 - Data (read-only): Mac `/Users/matt/Desktop/data/in2o3/{640,80}.extxyz`,
-  `scan_v3_swa.model`; cluster `/scratch/midway3/bousquet/diffusion/data/`. Configs ship
-  with Mac paths — `sed` them to the cluster path (this recurs on every clone; a `DATA_DIR`
-  env-var override was proposed but not built).
+  `scan_v3_swa.model`; cluster `/scratch/midway3/bousquet/diffusion/data/`.
+- **Config path convention (changed — no more sed-on-every-clone):** the real run configs
+  (`base`, `gen3`, `gen4`, `gen5`, `gen6`) now carry **cluster** paths, since that is the only
+  place they are ever run. The smoke configs (`smoke.yaml`, `smoke_ve.yaml`) keep **Mac**
+  paths — they are the local CPU plumbing checks. A `DATA_DIR` env-var override is still the
+  proper fix if this ever splits again; proposed, not built.
+- **`80.extxyz` on the cluster is UNVERIFIED.** `base.yaml`/`gen3.yaml` reference it, but only
+  `640.extxyz` + `scan_v3_swa.model` are confirmed present (gen5 trained off them). Check
+  before running a config with two sources.
+- **`.job` files are NOT in the repo** — they exist only on the cluster. `sweep.job` had three
+  bugs as of the gen5 pull: it `cd`s to the **gen2** tree, passes `--config configs/base.yaml`
+  (Mac paths → the `FileNotFoundError` in `slurm-52283054`), and — worse — `base.yaml` is
+  `type: vp`, so it would run the **VP sampler on the VE gen5 checkpoint**. See the sweep
+  footgun under Key Decisions.
 - Cluster: Midway3, SLURM, partition `gagalli-gpu`, `--constraint=A100`, env
   `/project2/gagalli/bousquet/envs/insite-diff`, modules
   `python/miniforge-25.3.0 cuda/12.2 cudnn mkl/2024.2`. Use `--ntasks-per-node=1` (no srun),

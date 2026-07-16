@@ -13,7 +13,7 @@ device: auto
 
 data:
   sources:
-    - {path: /Users/matt/Desktop/data/in2o3/640.extxyz, role: train_val}   # 640 ONLY (no 80)
+    - {path: /scratch/midway3/bousquet/diffusion/data/640.extxyz, role: train_val}   # 640 ONLY (no 80)
   traj_id_regex: 'config_type=(\S+)'
   species: [In, O]
   stride: 1
@@ -71,7 +71,7 @@ sampling:
   n_samples: 8
 
 mace:
-  model_path: /Users/matt/Desktop/data/in2o3/scan_v3_swa.model
+  model_path: /scratch/midway3/bousquet/diffusion/data/scan_v3_swa.model
   relax_fmax: 0.05
   relax_steps: 200
 

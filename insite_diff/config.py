@@ -133,6 +133,18 @@ class ModelConfig:
     sh_lmax: int = 2
     radial_basis: int = 8
     sigma_embed_dim: int = 32
+    # Message tensor-product parameterization:
+    #   "fc"  — FullyConnectedTensorProduct: the radial net emits a full uvw weight
+    #           block per edge (16k weights/edge at gen5's irreps). Correct but ~46x
+    #           more per-edge weights than needed; this is what gen1-gen5 trained with.
+    #   "uvu" — NequIP's actual scheme: per-path weights only, then a Linear mix.
+    # Default is "fc" so pre-gen6 checkpoints (whose stored config predates this key)
+    # rebuild with the architecture they were trained with and still load.
+    tp_mode: str = "fc"
+
+    def __post_init__(self):
+        if self.tp_mode not in ("fc", "uvu"):
+            raise ValueError(f"model.tp_mode must be fc|uvu, got {self.tp_mode!r}")
 
 
 @dataclass

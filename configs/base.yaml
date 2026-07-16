@@ -4,8 +4,8 @@ device: auto                      # mps if available else cpu
 
 data:
   sources:
-    - {path: /Users/matt/Desktop/data/in2o3/640.extxyz, role: train_val}
-    - {path: /Users/matt/Desktop/data/in2o3/80.extxyz,  role: train_only}
+    - {path: /scratch/midway3/bousquet/diffusion/data/640.extxyz, role: train_val}
+    - {path: /scratch/midway3/bousquet/diffusion/data/80.extxyz,  role: train_only}
   traj_id_regex: 'config_type=(\S+)'
   species: [In, O]
   stride: 1                       # justified by MSD/autocorr check (see scripts/inspect_data.py)
@@ -61,7 +61,7 @@ sampling:
   n_samples: 8
 
 mace:
-  model_path: /Users/matt/Desktop/data/in2o3/scan_v3_swa.model
+  model_path: /scratch/midway3/bousquet/diffusion/data/scan_v3_swa.model
   relax_fmax: 0.05
   relax_steps: 200
 

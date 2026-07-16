@@ -12,6 +12,12 @@
 checkpoints/
 runs/
 outputs/
+logs/
+
+# Cluster run pulls (rsync'd back from /scratch/.../diffusion/gen{N}/ for local analysis).
+# These contain whole nested clones + checkpoints — never track them.
+/gen[0-9]/
+/gen[0-9][0-9]/
 *.png
 !docs/**/*.png
 

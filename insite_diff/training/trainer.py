@@ -92,7 +92,7 @@ def build_model(cfg: Config, avg_neighbors: float) -> E3Denoiser:
     return E3Denoiser(
         n_species=len(cfg.data.species), hidden_irreps=m.hidden_irreps, sh_lmax=m.sh_lmax,
         n_layers=m.n_layers, radial_basis=m.radial_basis, sigma_embed_dim=m.sigma_embed_dim,
-        cutoff=cfg.graph.cutoff, avg_neighbors=avg_neighbors,
+        cutoff=cfg.graph.cutoff, avg_neighbors=avg_neighbors, tp_mode=m.tp_mode,
     )
 
 

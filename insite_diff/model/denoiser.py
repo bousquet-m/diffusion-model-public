@@ -24,7 +24,8 @@ from .. import e3nn_compat  # noqa: F401  (must precede e3nn import)
 from e3nn import o3
 from e3nn.math import soft_one_hot_linspace
 from e3nn.nn import Gate
-from e3nn.o3 import FullyConnectedTensorProduct, Irreps, Linear, SphericalHarmonics
+from e3nn.o3 import (FullyConnectedTensorProduct, Irreps, Linear, SphericalHarmonics,
+                     TensorProduct)
 
 from .embedding import NoiseEmbedding
 
@@ -47,16 +48,52 @@ def _build_gate(irreps_out: Irreps) -> tuple[Gate, Irreps]:
     return gate, gate.irreps_in
 
 
+def _uvu_tensor_product(irreps_in: Irreps, irreps_sh: Irreps,
+                        irreps_target: Irreps) -> tuple[TensorProduct, Irreps]:
+    """NequIP-style message tensor product: one ``uvu`` path per (input, sh) -> output
+    coupling that the target needs.
+
+    Under ``uvu`` the per-edge weights are indexed by the input multiplicity alone
+    (``mul`` weights per path) rather than the full ``mul_in x mul_sh x mul_out`` block
+    a FullyConnectedTensorProduct requires — ~46x fewer weights for the gen5 irreps.
+    The output carries one entry per path (duplicated/unsorted irreps), so callers mix
+    it into the target with a Linear.
+    """
+    target_irs = {ir for _, ir in irreps_target}
+    irreps_mid, instructions = [], []
+    for i, (mul, ir_in) in enumerate(irreps_in):
+        for j, (_, ir_sh) in enumerate(irreps_sh):
+            for ir_out in ir_in * ir_sh:
+                if ir_out in target_irs:
+                    instructions.append((i, j, len(irreps_mid), "uvu", True))
+                    irreps_mid.append((mul, ir_out))
+    irreps_mid = Irreps(irreps_mid)
+    tp = TensorProduct(irreps_in, irreps_sh, irreps_mid, instructions,
+                       shared_weights=False, internal_weights=False)
+    return tp, irreps_mid
+
+
 class Interaction(nn.Module):
-    """One equivariant message-passing layer with a noise-conditioned radial net."""
+    """One equivariant message-passing layer with a noise-conditioned radial net.
+
+    ``tp_mode`` selects the message parameterization; see ``ModelConfig.tp_mode``.
+    Both modes are equivariant and produce the same irreps — they differ only in how
+    many weights the radial net must emit per edge (and so in speed/param count).
+    """
 
     def __init__(self, irreps_in: Irreps, irreps_sh: Irreps, irreps_out: Irreps,
-                 radial_in: int, radial_hidden: int, avg_neighbors: float):
+                 radial_in: int, radial_hidden: int, avg_neighbors: float,
+                 tp_mode: str = "fc"):
         super().__init__()
         self.gate, tp_out = _build_gate(irreps_out)
-        self.tp = FullyConnectedTensorProduct(
-            irreps_in, irreps_sh, tp_out, shared_weights=False, internal_weights=False
-        )
+        if tp_mode == "uvu":
+            self.tp, irreps_mid = _uvu_tensor_product(irreps_in, irreps_sh, tp_out)
+            self.mix = Linear(irreps_mid, tp_out)   # mix duplicated paths into the gate input
+        else:
+            self.tp = FullyConnectedTensorProduct(
+                irreps_in, irreps_sh, tp_out, shared_weights=False, internal_weights=False
+            )
+            self.mix = None
         self.radial = nn.Sequential(
             nn.Linear(radial_in, radial_hidden), nn.SiLU(),
             nn.Linear(radial_hidden, self.tp.weight_numel),
@@ -67,10 +104,12 @@ class Interaction(nn.Module):
     def forward(self, node, edge_index, edge_sh, edge_scalars):
         src, dst = edge_index[0], edge_index[1]
         w = self.radial(edge_scalars)                      # (E, weight_numel)
-        msg = self.tp(node[src], edge_sh, w)               # (E, tp_out)
+        msg = self.tp(node[src], edge_sh, w)               # (E, tp_out | irreps_mid)
         agg = node.new_zeros(node.shape[0], msg.shape[1])
         agg.index_add_(0, dst, msg)
         agg = agg / (self.avg_neighbors ** 0.5)
+        if self.mix is not None:
+            agg = self.mix(agg)                            # (N, tp_out)
         return self.gate(agg) + self.skip(node)
 
 
@@ -78,7 +117,7 @@ class E3Denoiser(nn.Module):
     def __init__(self, n_species: int, hidden_irreps: str = "32x0e + 16x1o",
                  sh_lmax: int = 2, n_layers: int = 2, radial_basis: int = 8,
                  sigma_embed_dim: int = 32, cutoff: float = 4.0,
-                 avg_neighbors: float = 20.0):
+                 avg_neighbors: float = 20.0, tp_mode: str = "fc"):
         super().__init__()
         self.cutoff = cutoff
         self.radial_basis = radial_basis
@@ -94,7 +133,8 @@ class E3Denoiser(nn.Module):
         radial_in = radial_basis + sigma_embed_dim
         self.layers = nn.ModuleList([
             Interaction(hidden, self.irreps_sh, hidden, radial_in,
-                        radial_hidden=max(16, radial_basis * 4), avg_neighbors=avg_neighbors)
+                        radial_hidden=max(16, radial_basis * 4), avg_neighbors=avg_neighbors,
+                        tp_mode=tp_mode)
             for _ in range(n_layers)
         ])
         self.readout = Linear(hidden, Irreps("1x1o"))

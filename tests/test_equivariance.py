@@ -2,6 +2,7 @@
 score, translations leave it unchanged (relative-vector inputs), and the output is
 CoM-free."""
 import numpy as np
+import pytest
 import torch
 
 from insite_diff.data.graph import build_graph
@@ -10,10 +11,14 @@ from insite_diff import e3nn_compat  # noqa: F401
 from e3nn import o3
 
 
-def _model():
+TP_MODES = ["fc", "uvu"]
+
+
+def _model(tp_mode="fc"):
     torch.manual_seed(0)
     m = E3Denoiser(n_species=2, hidden_irreps="16x0e + 8x1o", sh_lmax=2, n_layers=2,
-                   radial_basis=6, sigma_embed_dim=8, cutoff=4.0, avg_neighbors=20.0)
+                   radial_basis=6, sigma_embed_dim=8, cutoff=4.0, avg_neighbors=20.0,
+                   tp_mode=tp_mode)
     return m.eval()
 
 
@@ -23,8 +28,9 @@ def _graph(pos, box=10.0, cutoff=4.0):
     return g
 
 
-def test_output_shape_and_com_free():
-    m = _model()
+@pytest.mark.parametrize("tp_mode", TP_MODES)
+def test_output_shape_and_com_free(tp_mode):
+    m = _model(tp_mode)
     torch.manual_seed(1)
     n = 40
     pos = torch.rand(n, 3) * 10
@@ -35,8 +41,9 @@ def test_output_shape_and_com_free():
     assert torch.allclose(eps.mean(0), torch.zeros(3), atol=1e-5)
 
 
-def test_rotation_equivariance():
-    m = _model()
+@pytest.mark.parametrize("tp_mode", TP_MODES)
+def test_rotation_equivariance(tp_mode):
+    m = _model(tp_mode)
     torch.manual_seed(2)
     n = 48
     pos = torch.rand(n, 3) * 10
@@ -52,9 +59,10 @@ def test_rotation_equivariance():
         f"max err {(eps_rot - eps @ R.T).abs().max().item():.2e}"
 
 
-def test_inversion_equivariance():
+@pytest.mark.parametrize("tp_mode", TP_MODES)
+def test_inversion_equivariance(tp_mode):
     # Parity: inverting coordinates should invert the (odd) vector output.
-    m = _model()
+    m = _model(tp_mode)
     torch.manual_seed(3)
     n = 32
     pos = torch.rand(n, 3) * 10
