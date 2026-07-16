@@ -2,6 +2,7 @@
 import math
 
 import numpy as np
+import pytest
 import torch
 
 from insite_diff.diffusion.noising import min_image, ve_add_noise, uniform_init
@@ -77,3 +78,64 @@ def test_annealed_langevin_oracle_reconstructs():
     out = annealed_langevin(sched, oracle, 24, cell, langevin_steps=12, step_lr=2e-5,
                             refine_steps=120, generator=torch.Generator().manual_seed(0))
     assert rmsd_same_atoms(out.numpy(), x0.numpy(), cell.numpy()) < 0.3
+
+
+# --------------------------------------------------------------------------- #
+# Seeded-RNG device discipline
+#
+# The eval scripts pair a CPU generator (for reproducibility) with a CUDA compute
+# device. Drawing with that pair raises "Expected a 'cuda' device type for generator
+# but found 'cpu'" — which a CPU-only dev box can never reproduce, so it reached the
+# cluster and killed a sweep at uniform_init. draw_randn/draw_rand encapsulate the
+# rule; the guard below is the part that actually runs without a GPU.
+# --------------------------------------------------------------------------- #
+def test_no_raw_seeded_rng_outside_helpers():
+    """Every seeded draw must go through draw_randn/draw_rand (or mirror their rule).
+
+    A raw torch.rand/randn/randint taking `generator=` and an explicit `device=` is the
+    exact shape of the bug; catching it by source inspection is the only way to catch it
+    on a CPU-only machine.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "insite_diff"
+    allowed = {("noising.py", "draw_randn"), ("noising.py", "draw_rand"),
+               ("schedule.py", "sample_sigma")}          # these implement the rule
+    offenders = []
+    for path in root.rglob("*.py"):
+        src = path.read_text()
+        fn = None
+        for i, line in enumerate(src.splitlines(), 1):
+            m = re.match(r"\s*def (\w+)", line)
+            if m:
+                fn = m.group(1)
+            if re.search(r"torch\.(rand|randn|randint)\(", line) and "generator=" in line:
+                if (path.name, fn) not in allowed:
+                    offenders.append(f"{path.name}:{i} in {fn}(): {line.strip()}")
+    assert not offenders, (
+        "raw seeded RNG draw bypassing draw_randn/draw_rand:\n  " + "\n  ".join(offenders))
+
+
+def test_uniform_init_is_reproducible_and_in_box():
+    cell = torch.eye(3) * 9.0
+    a = uniform_init(20, cell, generator=torch.Generator().manual_seed(7))
+    b = uniform_init(20, cell, generator=torch.Generator().manual_seed(7))
+    assert torch.allclose(a, b)                      # generator is actually honored
+    frac = a @ torch.linalg.inv(cell)
+    assert frac.min() >= -1e-6 and frac.max() <= 1 + 1e-6
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="reproduces a CUDA-only crash")
+def test_cpu_generator_with_cuda_device():
+    """The gen5-sweep crash: CPU generator + CUDA device must not raise, and the
+    result must land on the compute device."""
+    dev = torch.device("cuda")
+    cell = (torch.eye(3) * 10.0).to(dev)
+    g = torch.Generator(device="cpu").manual_seed(0)
+    x = uniform_init(16, cell, generator=g, device=dev, dtype=torch.float32)
+    assert x.device.type == "cuda" and x.shape == (16, 3)
+
+    sched = VESchedule(0.01, 0.75, 50).to(dev)
+    s = sched.sample_sigma(generator=torch.Generator(device="cpu").manual_seed(0))
+    assert s.device.type == "cuda"

@@ -98,6 +98,20 @@ def draw_randn(shape, device, dtype, generator: torch.Generator | None = None) -
     return x.to(device)
 
 
+def draw_rand(shape, device, dtype, generator: torch.Generator | None = None) -> torch.Tensor:
+    """torch.rand (uniform) counterpart of ``draw_randn`` — same cross-device rule.
+
+    Every seeded RNG draw must go through these two helpers. The eval scripts build a
+    CPU generator for reproducibility (``torch.Generator(device="cpu")``) and pass it
+    alongside a CUDA compute device; drawing directly with that pair raises
+    "Expected a 'cuda' device type for generator but found 'cpu'" — a crash that is
+    invisible on a CPU-only box.
+    """
+    gdev = generator.device if generator is not None else device
+    x = torch.rand(*shape, generator=generator, device=gdev, dtype=dtype)
+    return x.to(device)
+
+
 def com_free_noise(n_atoms: int, cell: torch.Tensor | None = None,
                    generator: torch.Generator | None = None,
                    device: torch.device | str = "cpu",
@@ -170,8 +184,8 @@ def uniform_init(n_atoms: int, cell: torch.Tensor,
     diffusion only has to fix *local* order — unlike the VP Gaussian blob, which
     concentrates atoms in the center and collapses.
     """
-    frac = torch.rand(n_atoms, 3, generator=generator, device=device, dtype=dtype)
-    return frac @ cell.to(dtype)
+    frac = draw_rand((n_atoms, 3), device, dtype, generator)
+    return frac @ cell.to(device=frac.device, dtype=dtype)
 
 
 def ve_add_noise(positions: torch.Tensor, sigma: torch.Tensor, cell: torch.Tensor,

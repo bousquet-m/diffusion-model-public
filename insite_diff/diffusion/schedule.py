@@ -102,9 +102,15 @@ class VESchedule:
         return self
 
     def sample_sigma(self, generator: torch.Generator | None = None) -> torch.Tensor:
-        """Random noise level from the ladder (for training)."""
-        idx = torch.randint(0, self.n_levels, (1,), generator=generator, device=self.sigmas.device)
-        return self.sigmas[idx]
+        """Random noise level from the ladder (for training).
+
+        Draws on the generator's device, not the ladder's: a CPU generator paired with a
+        CUDA schedule otherwise raises "Expected a 'cuda' device type for generator".
+        See ``noising.draw_randn`` / ``draw_rand`` for the same rule.
+        """
+        gdev = generator.device if generator is not None else self.sigmas.device
+        idx = torch.randint(0, self.n_levels, (1,), generator=generator, device=gdev)
+        return self.sigmas[idx.to(self.sigmas.device)]
 
     def cond(self, sigma: torch.Tensor) -> torch.Tensor:
         """Map sigma -> [0,1] conditioning scalar via normalized log(sigma)."""
