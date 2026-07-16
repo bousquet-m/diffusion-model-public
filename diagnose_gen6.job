@@ -1,0 +1,78 @@
+#!/bin/bash
+# Head-to-head dead-zone diagnostic: gen6 (uvu, 74,656 params) vs gen5 (fc, 1,079,520).
+#
+# The question gen6 exists to answer: did dropping the FullyConnectedTensorProduct's
+# per-edge weight blob cost any real capacity, or was it pure overhead? Same irreps, same
+# recipe, same structure, same repeats — so the only variable is model.tp_mode.
+#
+# Reading (per HANDOFF): a working VE model keeps cos high and x0_RMSD small at ALL sigma.
+# gen5's reference table (--repeats 4, so +/- a few 0.01):
+#     sigma    cos     x0_RMSD
+#     0.7500   0.530   1.105        <- the weak end; sampling starts here
+#     0.4058   0.840   0.380
+#     0.2176   0.886   0.177        <- peak
+#     0.1177   0.829   0.114
+#     0.0637   0.700   0.078
+#     0.0345   0.505   0.052
+#     0.0185   0.340   0.030
+#     0.0100   0.190   0.017        <- low-sigma falloff is BENIGN: noise below the MD
+#                                      thermal rattle, true score really is ~0
+# If gen6 matches: the uvu capacity was waste; you have a ~100x faster model for free.
+# If gen6 regresses: spend the freed budget on hidden_irreps/n_layers and re-run.
+#
+# --repeats 32 (not 4): the gen5 checkpoint sweep was inconclusive because 4 draws left
+# ~0.02 of noise on cos, which is the size of the effect. gen6 is cheap enough to fix that.
+#
+#   cd /scratch/midway3/bousquet/diffusion/gen6/diffusion-model-public
+#   git pull                      # MUST be >= ee90b0c (the CPU-generator/CUDA fix)
+#   mkdir -p logs
+#   sbatch diagnose_gen6.job
+#SBATCH --job-name=insite-diagnose-gen6
+#SBATCH --account=pi-gagalli
+#SBATCH --partition=gagalli-gpu
+#SBATCH --qos=gagalli-gpu
+#SBATCH --constraint=A100
+#SBATCH --time=00:30:00
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --mail-user=bousquet@uchicago.edu
+#SBATCH --mail-type=END,FAIL
+#SBATCH --output=logs/%x-%j.out
+
+set -euo pipefail
+module load python/miniforge-25.3.0 cuda/12.2 cudnn mkl/2024.2
+source activate /project2/gagalli/bousquet/envs/insite-diff
+
+cd /scratch/midway3/bousquet/diffusion/gen6/diffusion-model-public
+export PYTHONPATH=.
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
+
+STRUCT=/scratch/midway3/bousquet/diffusion/data/640.extxyz
+REPEATS=32
+# gen5 was trained from the gen2 tree; its checkpoint still lives there.
+GEN5=/scratch/midway3/bousquet/diffusion/gen2/diffusion-model-public/checkpoints/gen5/final.pt
+
+echo "host=$(hostname)"
+python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+echo "code: $(git rev-parse --short HEAD)"
+
+echo
+echo "################ gen6 (tp_mode=uvu) ################"
+python scripts/diagnose.py --checkpoint checkpoints/gen6/final.pt \
+    --structure "$STRUCT" --device cuda --repeats "$REPEATS"
+
+# gen5 is an fc checkpoint: its stored config predates model.tp_mode, so it rebuilds as
+# tp_mode="fc" (the schema default) under this tree's code. Same-tree, same-run comparison.
+if [ -f "$GEN5" ]; then
+    echo
+    echo "################ gen5 (tp_mode=fc, reference) ################"
+    python scripts/diagnose.py --checkpoint "$GEN5" \
+        --structure "$STRUCT" --device cuda --repeats "$REPEATS"
+else
+    echo
+    echo "[skip] gen5 reference not found at $GEN5 — gen6 table above stands alone;"
+    echo "       compare it by hand to the gen5 numbers in this file's header."
+fi
