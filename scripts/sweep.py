@@ -129,7 +129,8 @@ def run_fraction(cfg, model, val_ds, mask_frac, device, args, train_desc):
     }
 
     if args.mace:
-        from insite_diff.analysis.mace_relax import load_calculator, potential_energy, relax
+        from insite_diff.analysis.mace_relax import (load_calculator, nvt_refine,
+                                                     potential_energy, relax)
         dev = "cuda" if getattr(device, "type", "") == "cuda" else "cpu"
         calc = load_calculator(cfg.mace.model_path, device=dev)
         e_gen = [potential_energy(a, calc) / len(a) for a in gen_frames]
@@ -138,6 +139,25 @@ def run_fraction(cfg, model, val_ds, mask_frac, device, args, train_desc):
         if args.relax_steps > 0:
             e_rel = [relax(a, calc, cfg.mace.relax_fmax, args.relax_steps)[2] / len(a) for a in gen_frames]
             rec["gen_after_relax"] = float(np.mean(e_rel))
+
+        # NVT post-refinement (step 4): does a short MD+quench close the under-coordination?
+        # Recompute the structural metrics on the refined frames, not just energy.
+        m = cfg.mace
+        if m.nvt_steps > 0:
+            print(f"[sweep]   NVT refine: T={m.nvt_temperature_K}K dt={m.nvt_timestep_fs}fs "
+                  f"steps={m.nvt_steps} on {len(gen_frames)} frames...")
+            refined = [nvt_refine(a, calc, temperature_K=m.nvt_temperature_K,
+                                  timestep_fs=m.nvt_timestep_fs, steps=m.nvt_steps,
+                                  friction_per_fs=m.nvt_friction_per_fs,
+                                  quench_fmax=m.relax_fmax, quench_steps=m.relax_steps,
+                                  seed=cfg.seed + i)[0] for i, a in enumerate(gen_frames)]
+            rec["gen_after_nvt"] = float(np.mean([potential_energy(a, calc) / len(a)
+                                                  for a in refined]))
+            nvt_rdf = all_partials(refined, Z_IN, Z_O, rmax, nbins, masks, restrict=restrict)
+            nvt_c = coordination.summary(refined, Z_IN, Z_O, cn, masks, center_mobile_only=cmo)
+            result["In-O_peak"]["gen_nvt"] = first_peak(*nvt_rdf["In-O"])
+            result["mean_In-O_bond"]["gen_nvt"] = nvt_c["mean_bond"]
+            result["mean_In-O_coordination"]["gen_nvt"] = nvt_c["mean_cn"]
         result["energy_per_atom"] = rec
     return result
 
@@ -162,6 +182,12 @@ def main():
     ap.add_argument("--langevin-step-lr", type=float, default=None)
     ap.add_argument("--langevin-steps", type=int, default=None)
     ap.add_argument("--refine-steps", type=int, default=None)
+    # MACE NVT post-refinement (step 4). --nvt-steps > 0 (with --mace) runs a short NVT MD +
+    # 0 K quench on each generated frame and reports post-refinement coordination/bond/energy,
+    # so we can see whether it closes the under-coordination. None = keep config value.
+    ap.add_argument("--nvt-steps", type=int, default=None)
+    ap.add_argument("--nvt-temp", type=float, default=None, help="NVT temperature (K)")
+    ap.add_argument("--nvt-timestep", type=float, default=None, help="NVT timestep (fs)")
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(line_buffering=True)   # stream progress to redirected logs
@@ -176,6 +202,12 @@ def main():
         cfg.diffusion.langevin_steps = args.langevin_steps
     if args.refine_steps is not None:
         cfg.diffusion.refine_steps = args.refine_steps
+    if args.nvt_steps is not None:
+        cfg.mace.nvt_steps = args.nvt_steps
+    if args.nvt_temp is not None:
+        cfg.mace.nvt_temperature_K = args.nvt_temp
+    if args.nvt_timestep is not None:
+        cfg.mace.nvt_timestep_fs = args.nvt_timestep
     if cfg.diffusion.type == "ve":
         d = cfg.diffusion
         print(f"[sweep] VE Langevin: step_lr={d.langevin_step_lr} steps={d.langevin_steps} "

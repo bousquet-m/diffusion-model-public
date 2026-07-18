@@ -174,6 +174,12 @@ class MaceConfig:
     model_path: str = ""
     relax_fmax: float = 0.05
     relax_steps: int = 200
+    # NVT post-refinement (step 4). NVT only — the potential is not reliable for the
+    # stress/cell dynamics NPT needs, so the generated box is held fixed.
+    nvt_temperature_K: float = 500.0
+    nvt_timestep_fs: float = 1.0
+    nvt_steps: int = 0              # 0 = off; sweep --nvt-steps overrides
+    nvt_friction_per_fs: float = 0.01
 
 
 @dataclass

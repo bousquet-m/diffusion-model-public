@@ -81,6 +81,11 @@ mace:
   model_path: /scratch/midway3/bousquet/diffusion/data/scan_v3_swa.model
   relax_fmax: 0.05
   relax_steps: 200
+  # NVT post-refinement (step 4) — NVT only (no NPT: potential unreliable for cell dynamics).
+  nvt_temperature_K: 500.0
+  nvt_timestep_fs: 1.0
+  nvt_steps: 0                     # 0 = off; enable via sweep --nvt-steps (e.g. 200)
+  nvt_friction_per_fs: 0.01
 
 validation:
   rdf_rmax: 6.0

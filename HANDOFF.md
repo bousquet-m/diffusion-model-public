@@ -129,9 +129,16 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
    `scripts/collect_langevin_tuning.py outputs/tune_gen6` prints the comparison table. Better
    = d_coord→0 and |E gen−ref|↓ WITHOUT spread collapsing (relaxation bought with diversity
    is a bad trade). If knobs don't close it, it's step 2's job (MACE-MD).
-2. **MACE-MD post-refinement** — the paper's cleanup for exactly this under-relaxation (short
-   NVT/NPT). New helper in `insite_diff/analysis/mace_relax.py`, called after sampling in
-   `sweep.py`. Do only if step 1 leaves a gap.
+2. **[BUILT, not yet run] MACE NVT post-refinement** (`nvt_refine_gen6.job`) — the paper's
+   cleanup for the under-relaxation. `mace_relax.nvt_refine` = short Langevin NVT MD + 0 K
+   quench. **NVT ONLY (no NPT):** scan_v3_swa is unreliable for stress/cell dynamics, so the
+   generated box is held fixed — the thermostat never touches the cell (a test asserts this).
+   `sweep.py --nvt-steps/--nvt-temp/--nvt-timestep` (or `mace.nvt_*` in config) refines each
+   generated frame and reports post-NVT coordination/bond/energy (`*.gen_nvt`,
+   `energy_per_atom.gen_after_nvt`). `collect_langevin_tuning.py` shows the extra columns.
+   Job does a T line-search {300,500,800 K}. Works if `d_coord_nvt`→0 and `E_nvt-ref` <
+   `E gen-ref`; too-high T restructures. Run only if step 1's knobs leave a gap — but it's
+   ready either way. NVT is MACE-heavy (nvt_steps+relax_steps force evals per frame).
 3. **Surfaces** (the end goal) — `mask.geometry: slab` implemented/tested; needs vacuum-cell
    handling. The low-frac tuning above is the closest proxy already in hand.
 

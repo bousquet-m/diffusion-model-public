@@ -30,8 +30,13 @@ def main() -> None:
         print(f"no run subdirectories under {root}")
         return
 
+    # Post-NVT columns only appear if any run enabled --nvt-steps (step 4).
+    has_nvt = any("gen_nvt" in r.get("mean_In-O_coordination", {})
+                  for rd in run_dirs for r in _load_run(rd))
     hdr = (f"{'run':>10} {'frac':>5} {'coord gen/ref':>15} {'d_coord':>8} "
            f"{'bond gen/ref':>17} {'E gen-ref(meV)':>15} {'spread(A)':>10}")
+    if has_nvt:
+        hdr += f" {'coord_nvt':>9} {'d_coord_nvt':>11} {'E_nvt-ref(meV)':>14}"
     print(hdr)
     print("-" * len(hdr))
     for rd in run_dirs:
@@ -42,11 +47,20 @@ def main() -> None:
             e = r.get("energy_per_atom")
             de = (e["gen_before"] - e["ref"]) * 1000 if e else float("nan")
             dcoord = c["gen"] - c["ref"]
-            print(f"{name:>10} {r['mask_frac']:>5} {c['gen']:>7.3f}/{c['ref']:<7.3f} "
-                  f"{dcoord:>+8.3f} {b['gen']:>8.4f}/{b['ref']:<8.4f} "
-                  f"{de:>+15.1f} {r['multiseed_spread_rmsd']:>10.3f}")
-    print("\nbetter = d_coord nearer 0 and |E gen-ref| smaller, spread NOT collapsed "
-          "(that would be relaxation bought with diversity).")
+            line = (f"{name:>10} {r['mask_frac']:>5} {c['gen']:>7.3f}/{c['ref']:<7.3f} "
+                    f"{dcoord:>+8.3f} {b['gen']:>8.4f}/{b['ref']:<8.4f} "
+                    f"{de:>+15.1f} {r['multiseed_spread_rmsd']:>10.3f}")
+            if has_nvt and "gen_nvt" in c:
+                cn = c["gen_nvt"]
+                enr = (e["gen_after_nvt"] - e["ref"]) * 1000 if e and "gen_after_nvt" in e else float("nan")
+                line += f" {cn:>9.3f} {cn - c['ref']:>+11.3f} {enr:>+14.1f}"
+            print(line)
+    tail = ("\nbetter = d_coord nearer 0 and |E gen-ref| smaller, spread NOT collapsed "
+            "(that would be relaxation bought with diversity).")
+    if has_nvt:
+        tail += ("\nNVT (step 4) works if d_coord_nvt is nearer 0 than d_coord and "
+                 "E_nvt-ref < E gen-ref — i.e. the refinement recovered coordination/energy.")
+    print(tail)
 
 
 if __name__ == "__main__":
