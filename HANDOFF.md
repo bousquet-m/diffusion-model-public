@@ -122,13 +122,14 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
   in fixed context = the SURFACE geometry, so this is the number to watch toward the end goal.
 
 ## Next Steps (ordered)
-1. **[IN PROGRESS] Langevin tuning** (`tune_langevin_gen6.job`) — close the under-relaxation
-   with SAMPLING-time knobs (no retrain). Two line-searches: refine_steps {100,500,2000} and
-   step_lr {2e-5,5e-5,1e-4}, objective `--fractions 0.1,1.0 --mace`. `scripts/sweep.py` now
-   takes `--refine-steps` / `--langevin-step-lr` / `--langevin-steps` overrides.
-   `scripts/collect_langevin_tuning.py outputs/tune_gen6` prints the comparison table. Better
-   = d_coord→0 and |E gen−ref|↓ WITHOUT spread collapsing (relaxation bought with diversity
-   is a bad trade). If knobs don't close it, it's step 2's job (MACE-MD).
+1. **[DONE] Langevin tuning** (`tune_langevin_gen6.job`, `outputs/tune_gen6/`). Verdict:
+   **`langevin_step_lr` is the lever; `refine_steps` is not.** Bumping step_lr 2e-5 → **1e-4
+   (now the gen6.yaml default)** closed ~66% of the low-frac coordination gap (d_coord −0.48
+   → −0.16 @ frac 0.1) and ~72% of the energy error (+96 → +27 meV), with diversity intact
+   (spread 1.57 unchanged @ 1.0). refine_steps {500,2000} did ~nothing → under-coordination
+   is set during the ANNEAL, not the final quench. 1e-4 is near the safe ceiling: step ~
+   lr·(σ/σ_min)² ≈ 0.56 Å @ σ_max; 2e-4 (~1.1 Å) risks instability, so don't crank further.
+   **Residual: low-frac still −0.16 / +27 meV** — that is step 2's (NVT) job.
 2. **[BUILT, not yet run] MACE NVT post-refinement** (`nvt_refine_gen6.job`) — the paper's
    cleanup for the under-relaxation. `mace_relax.nvt_refine` = short Langevin NVT MD + 0 K
    quench. **NVT ONLY (no NPT):** scan_v3_swa is unreliable for stress/cell dynamics, so the

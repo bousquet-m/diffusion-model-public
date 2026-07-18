@@ -1,7 +1,12 @@
 #!/bin/bash
-# MACE NVT post-refinement for gen6 (HANDOFF step 4). The gen6 structures are mildly
-# under-coordinated (worst at low mask_frac); a short NVT MD + 0 K quench should let
-# under-coordinated atoms find neighbors and drop the energy toward the reference.
+# MACE NVT post-refinement for gen6 (HANDOFF step 4), on the STEP-3-TUNED sampler
+# (langevin_step_lr=1e-4). Step 3 closed most of the under-coordination but left a residual
+# at low mask_frac (d_coord -0.16, E +27 meV @ frac 0.1); this is the cleanup for that
+# residual. A short NVT MD + 0 K quench lets the remaining under-coordinated atoms find
+# neighbors and drops the energy toward the reference.
+#
+# Each row is self-contained: the collector shows the tuned-sampler structure BEFORE NVT
+# (gen / d_coord) and AFTER (gen_nvt / d_coord_nvt), so no separate baseline run is needed.
 #
 # NVT ONLY — no NPT. This potential (scan_v3_swa) is not reliable for the stress/cell
 # dynamics NPT needs, so the generated box is held fixed. nvt_refine enforces this (the
@@ -45,9 +50,11 @@ export PYTHONPATH=.
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
 
 CKPT=checkpoints/gen6/final.pt
+# --langevin-step-lr 1e-4 is the step-3 tuned value; also now the gen6.yaml default, passed
+# explicitly so the run is unambiguous and the log records it regardless of config drift.
 COMMON="--config configs/gen6.yaml --checkpoint $CKPT --fractions 0.1,1.0 \
         --n-structures 2 --n-seeds 3 --train-sample 40 --mace \
-        --nvt-steps 150 --nvt-timestep 1.0"
+        --langevin-step-lr 1e-4 --nvt-steps 150 --nvt-timestep 1.0"
 
 echo "host=$(hostname)"; echo "code: $(git rev-parse --short HEAD)"
 python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"

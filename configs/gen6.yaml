@@ -48,7 +48,13 @@ diffusion:
   sigma_max: 0.75                  # A — small; never fully destroys the structure
   n_sigma_levels: 500              # ladder length (training samples levels; sampling anneals)
   langevin_steps: 5                # per level at sampling -> 500*5 = 2500 anneal steps
-  langevin_step_lr: 2.0e-5
+  langevin_step_lr: 1.0e-4         # tuned (step 3): 5x the 2e-5 default. Closed ~66% of the
+                                   # low-frac coordination gap (d_coord -0.48 -> -0.16 @ 0.1)
+                                   # and ~72% of the energy error, diversity intact. Near the
+                                   # safe ceiling: step ~ lr*(sigma/sigma_min)^2 -> ~0.56 A at
+                                   # sigma_max; 2e-4 (~1.1 A) risks instability. refine_steps
+                                   # had ~no effect (under-coordination is set in the anneal,
+                                   # not the final quench). Residual low-frac gap -> NVT (step 4).
   refine_steps: 100                # final no-external-noise refinement
 
 model:                             # same irreps as gen5 — only the TP parameterization changes,
