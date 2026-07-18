@@ -156,6 +156,12 @@ def main():
     ap.add_argument("--mace", action="store_true")
     ap.add_argument("--relax-steps", type=int, default=0)
     ap.add_argument("--no-ema", action="store_true")
+    # VE Langevin overrides (sampling-time only — no retraining). Left as None they
+    # keep the config value; set them to tune the under-relaxation the gen6 sweep showed
+    # without editing a config per grid point. See HANDOFF "Langevin tuning".
+    ap.add_argument("--langevin-step-lr", type=float, default=None)
+    ap.add_argument("--langevin-steps", type=int, default=None)
+    ap.add_argument("--refine-steps", type=int, default=None)
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(line_buffering=True)   # stream progress to redirected logs
@@ -163,6 +169,17 @@ def main():
         pass
 
     cfg = load_config(args.config)
+    # Apply VE Langevin overrides before anything reads cfg.diffusion.
+    if args.langevin_step_lr is not None:
+        cfg.diffusion.langevin_step_lr = args.langevin_step_lr
+    if args.langevin_steps is not None:
+        cfg.diffusion.langevin_steps = args.langevin_steps
+    if args.refine_steps is not None:
+        cfg.diffusion.refine_steps = args.refine_steps
+    if cfg.diffusion.type == "ve":
+        d = cfg.diffusion
+        print(f"[sweep] VE Langevin: step_lr={d.langevin_step_lr} steps={d.langevin_steps} "
+              f"refine={d.refine_steps} (sigma_levels={d.n_sigma_levels})")
     seed_everything(cfg.seed)
     device = select_device(cfg.device)
     Path(args.out).mkdir(parents=True, exist_ok=True)

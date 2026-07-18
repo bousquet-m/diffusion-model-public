@@ -103,19 +103,42 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
   to within 4-draw noise at every σ (σ_max cos: 0.499/0.530/0.537/0.530 — step_45000 is
   *marginally above* final). ~14 h of the 20 h run bought nothing.
 
+## gen6 RESULTS — MILESTONE 1 PASSED (bulk In₂O₃, uvu model)
+- **uvu costs nothing.** 32-repeat diagnose, gen6 (74,656 params) vs gen5 (1,079,520),
+  same run/structure: cos within ~0.01 at every σ (σ_max 0.520 vs 0.528; peak 0.877 vs
+  0.887), x0_RMSD identical to 3 dp. The FC radial net's 531k params were pure overhead.
+  **Do NOT spend the freed budget on capacity — the gap is below the noise floor.**
+- **gen6 physically works — full ladder, 30 samples/fraction, `outputs/sweep_gen6/`.**
+  mean In-O bond tracks ref within a few mÅ across all mask_frac; energies +28..+102
+  meV/atom above MD (slightly under-relaxed, ~thermal). vs gen2/gen3 VP failure (bond ~2.02,
+  E ~−10⁹) this is a different planet.
+- **Diversity is real (NOT memorization).** multi-seed spread at mask_frac=1.0 = 1.57 Å RMSD
+  across 30 seeds → different valid structures, not one memorized cell. The `memNN` ≈ 0.9999
+  is the SATURATED metric ceiling (a real held-out structure scores 0.99997 against the same
+  bank; random gas scores 0.962). Read the spread panel, not memNN. TODO: report the held-out
+  ref baseline alongside memNN so that panel stops reading as a false alarm.
+- **One coherent flaw → drives step 3.** Under-coordination, worst at low mask_frac:
+  d_coord (gen−ref) = −0.54 @ frac 0.016 → −0.03 @ 1.0. Low frac = a small generated region
+  in fixed context = the SURFACE geometry, so this is the number to watch toward the end goal.
+
 ## Next Steps (ordered)
-1. **Train gen6** (`configs/gen6.yaml`): gen5's recipe + the `tp_mode: uvu` fix + 30k steps.
-   Then `diagnose.py` on it and compare to the gen5 table above — same irreps, so the
-   comparison isolates the tp_mode effect. **Note gen6 is 74,656 params vs gen5's 1,079,520**
-   (the FC radial net was 531k of pure weight-emission overhead). If diagnose regresses vs
-   gen5, spend the freed budget on `hidden_irreps`/`n_layers` — that is the moment to do it,
-   not before.
-2. **Run `scripts/sweep.py`** (add `--mace`) for the physical verdict: mobile In-O
-   RDF/coordination/bond and before/after-relax energies. Compare to the gen2/gen3 sweep
-   failure (bond ~2.02 vs ref 2.19, energies ~−10⁹). NB the sweep is 7 fractions × 3
-   structures × 10 seeds × 2600 forwards = **546k sequential single-structure forwards** —
-   that, not MACE, is why it takes ~4 h. gen5 checkpoints are `fc` and get no speedup;
-   only a gen6 (uvu) model does.
+1. **[IN PROGRESS] Langevin tuning** (`tune_langevin_gen6.job`) — close the under-relaxation
+   with SAMPLING-time knobs (no retrain). Two line-searches: refine_steps {100,500,2000} and
+   step_lr {2e-5,5e-5,1e-4}, objective `--fractions 0.1,1.0 --mace`. `scripts/sweep.py` now
+   takes `--refine-steps` / `--langevin-step-lr` / `--langevin-steps` overrides.
+   `scripts/collect_langevin_tuning.py outputs/tune_gen6` prints the comparison table. Better
+   = d_coord→0 and |E gen−ref|↓ WITHOUT spread collapsing (relaxation bought with diversity
+   is a bad trade). If knobs don't close it, it's step 2's job (MACE-MD).
+2. **MACE-MD post-refinement** — the paper's cleanup for exactly this under-relaxation (short
+   NVT/NPT). New helper in `insite_diff/analysis/mace_relax.py`, called after sampling in
+   `sweep.py`. Do only if step 1 leaves a gap.
+3. **Surfaces** (the end goal) — `mask.geometry: slab` implemented/tested; needs vacuum-cell
+   handling. The low-frac tuning above is the closest proxy already in hand.
+
+### For re-running the passing verdict (reference)
+`scripts/sweep.py` + `--mace`: 7 fractions × 3 × 10 × 2600 forwards = 546k sequential
+single-structure forwards (that, not MACE, is the cost). gen5 (`fc`) gets no uvu speedup;
+gen6 does. Always `--config` matching the checkpoint's diffusion type (see SWEEP FOOTGUN).
 3. **If sampling under/over-shoots** (structure right but energies off), tune the Langevin
    knobs in `gen5.yaml` `diffusion:` — `langevin_step_lr`, `langevin_steps`, `refine_steps`
    (NCSN defaults; `annealed_langevin` in `insite_diff/diffusion/sampler.py`). Diagnose
