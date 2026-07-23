@@ -131,13 +131,21 @@ def inpaint(
 def ve_inpaint(schedule: VESchedule, model, positions: torch.Tensor, cell: torch.Tensor,
                types: torch.Tensor, mobile_mask: torch.Tensor, cutoff: float,
                max_neighbors: int, langevin_steps: int, step_lr: float, refine_steps: int,
-               generator: torch.Generator | None = None, device="cpu") -> torch.Tensor:
+               generator: torch.Generator | None = None, device="cpu",
+               start_sigma: float | None = None) -> torch.Tensor:
     """Clamp context, generate mobile via annealed Langevin.
 
     In physical Cartesian coordinates (no normalized frame), so context atoms are
     simply held at their known positions (re-noised to the current sigma each step,
     RePaint-style); no CoM realignment is needed. mask_frac=1.0 (empty context)
     reduces to unconditional annealed_langevin.
+
+    SDEdit augmentation (``start_sigma`` > 0): instead of the full anneal from the
+    uniform prior at sigma_max, begin partway down the ladder from the REAL structure
+    (``positions``) plus ``start_sigma`` of noise, iterating only the sigma levels at or
+    below ``start_sigma``. This is the similarity<->diversity dial for making "more like
+    these" structures from few training points: smaller start_sigma stays closer to the
+    seed. At mask_frac=1.0 the whole structure is the seed (context empty).
     """
     positions = positions.to(device)
     cell = cell.to(device)
@@ -159,9 +167,17 @@ def ve_inpaint(schedule: VESchedule, model, positions: torch.Tensor, cell: torch
             x[context] = positions[context] + sigma * eps_c[context]
         return x
 
-    x = uniform_init(n, cell, generator=generator, device=device, dtype=dtype)
-    x = clamp_context(x, sigmas[0])
-    for sigma in sigmas:
+    if start_sigma is not None and start_sigma > 0:
+        ladder = sigmas[sigmas <= float(start_sigma)]
+        if ladder.numel() == 0:
+            raise ValueError(f"start_sigma {start_sigma} is below sigma_min {float(sigma_min)}")
+        eps0 = com_free_noise(n, generator=generator, device=device, dtype=dtype)
+        x = _wrap(positions + ladder[0] * eps0, cell)   # SDEdit: real seed + intermediate noise
+    else:
+        ladder = sigmas
+        x = uniform_init(n, cell, generator=generator, device=device, dtype=dtype)
+    x = clamp_context(x, ladder[0])
+    for sigma in ladder:
         step = step_lr * (sigma / sigma_min) ** 2
         for _ in range(langevin_steps):
             eps_hat = predict_eps(x, sigma)
@@ -185,10 +201,11 @@ def inpaint_dispatch(cfg, model, positions, cell, types, mobile_mask, device,
     d = cfg.diffusion
     if d.type == "ve":
         sched = VESchedule(d.sigma_min, d.sigma_max, d.n_sigma_levels).to(device)
+        start_sigma = getattr(d, "sdedit_sigma", 0.0) or None
         return ve_inpaint(sched, model, positions, cell, types, mobile_mask,
                           cfg.graph.cutoff, cfg.graph.max_neighbors,
                           d.langevin_steps, d.langevin_step_lr, d.refine_steps,
-                          generator=generator, device=device)
+                          generator=generator, device=device, start_sigma=start_sigma)
     sched = VPSchedule(d.timesteps, d.beta_schedule).to(device)
     return inpaint(sched, model, positions, cell, types, mobile_mask,
                    cutoff=cfg.graph.cutoff, max_neighbors=cfg.graph.max_neighbors,

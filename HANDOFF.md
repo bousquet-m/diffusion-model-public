@@ -1,5 +1,77 @@
 # HANDOFF
 
+## amorphous-carbon branch (a-C) — NEW MATERIAL on the gen6 machinery
+Branch `amorphous-carbon`, off `amorphous-score-diffusion`. The method is unchanged from
+gen6 (VE + annealed Langevin + uniform-in-cell prior + uvu E(3) denoiser); only the
+material-specific pieces are new. Goal: train on 10 AIMD a-C snapshots and GENERATE more
+structures from the same distribution — the finetuned MLIP cannot reproduce this
+distribution via MD, and the diffusion model samples the structure distribution directly
+(no potential), so it can populate what MD can't.
+
+**Data (Mac `/Users/matt/Desktop/data/aC`, cluster `/scratch/midway3/bousquet/diffusion/aC`).**
+10 independent AIMD final snapshots, 216 atoms each, single density 3.25 g/cc, boxes
+10.86–10.97 Å. This is the ENTIRE training set. `coordination_numbers.py` (rcut=1.95 Å,
+cn 2/3/4 = sp/sp²/sp³ as % of atoms) is THE metric.
+
+**Fixes applied in preprocessing (`scripts/preprocess_ac.py`, verified — do not rediscover):**
+- Species mislabel: raw extxyz column is "H" but the atoms are carbon (216 atoms in a
+  10.88 Å box = ~3.3 g/cc = a-C, not 0.28 g/cc for H). Relabelled H→C. Verified rho on the
+  10 snapshots = 3.26–3.36 g/cc.
+- Trajectory IDs: all 10 raw files share `config_type=ac_325` (one trajectory → no split).
+  Each snapshot gets a unique id `ac_325_1 … ac_325_10`. With only 10, val_fraction=0.2 →
+  2 held out (ac_325_9, ac_325_10 under seed 0).
+- Output is one combined `aC.extxyz` (10 frames), mirroring how 640.extxyz packs In2O3.
+  STEP 0 of `train_ac.job` runs the relabel on the cluster (idempotent).
+
+**Reference sp³% distribution (the target), computed on the 10 relabelled snapshots:**
+**sp³% = 91.9 ± 3.2 (range 84.3–95.4), sp²% = 8.0, mean C-coordination = 3.92.** High-sp³
+(tetrahedral "ta-C"). SUCCESS = generated structures reproduce this distribution's MEAN AND
+SPREAD at the right density, are DIVERSE (multi-seed spread ≫ 0, low SOAP self-similarity),
+hold under DFT single-points, and give sane MACE energies. sp²/sp³ is the PRIMARY verdict;
+MACE energy is SECONDARY (same finetuned MLIP that fails dynamically).
+
+**Receptive field (the a-C analog of the In2O3 rule):** box ≈ 10.88 Å → box/2 = 5.43 Å, so
+`graph.cutoff × n_layers` must stay under it. `ac.yaml` uses cutoff 2.5 × n_layers 2 = 5.0 Å
+(gen6's 5.0×2=10 would wrap this small a cell). Verified avg_neighbors @2.5 Å = **9.1** (sane),
+no receptive-field warning at train time. This graph/message cutoff is SEPARATE from the
+metric's C-C rcut = 1.95 Å.
+
+**What was built (all tests pass: 79):**
+- `scripts/preprocess_ac.py` — the H→C + unique-id relabel pass.
+- `insite_diff/analysis/carbon.py` — sp/sp²/sp³ metric (mobile-restricted), per-frame
+  distribution + mean/spread. Reproduces the reference (91.9 ± 3.2) exactly. Tests added to
+  `tests/test_analysis.py`.
+- `configs/ac.yaml` — type ve, tp_mode uvu, species [C], cutoff 2.5, **sigma_max 0.60**
+  (scaled below gen6's 0.75 for the shorter ~1.5 Å C-C bond: 0.60/1.5 ≈ 0.75/2.15),
+  cluster aC data + `mace-aC-finetune.model`. `configs/smoke_ac.yaml` = fast CPU plumbing check.
+- `scripts/sweep.py` is now material-aware (`_is_carbon` = species==["C"]): C-C RDF, the sp³%
+  metric gen/ref, SOAP species=("C",), sp³% panels, and a once-computed reference distribution
+  in `sweep.json`. In-O path untouched. New `--sdedit-sigma` override.
+- **SDEdit augmentation** (`ve_inpaint(..., start_sigma=)`, plumbed via `diffusion.sdedit_sigma`
+  / `sweep --sdedit-sigma`): start the anneal from a real structure + intermediate-σ noise
+  instead of the uniform prior, iterating only the ladder ≤ start_sigma. Similarity↔diversity
+  dial; recommended for augmentation given only 10 training points. Tested (stays closer to the
+  seed than full generation; raises below sigma_min).
+- Job scripts (repo, not hand-edited on cluster): `train_ac.job` (relabel → VE oracle canary →
+  train), `diagnose_ac.job` (data-sufficiency verdict, held-out vs training snapshot),
+  `sweep_ac.job` (sp³% verdict + SDEdit line-search). Run tree:
+  `/scratch/midway3/bousquet/diffusion/amorphous-carbon/diffusion-model-public`.
+- Config: added `validation.cn_cutoff_cc` (1.95) and `diffusion.sdedit_sigma` (0.0).
+
+**De-risked locally (CPU):** VE oracle on an a-C snapshot reconstructs 0.000 Å; zero control
+stays box-filled (spread 0.99, no collapse) — formulation sound before training. Smoke
+train/diagnose/sweep run clean (split 8/2, avg_neighbors 9.1, carbon metric + SDEdit sweep
+end-to-end).
+
+**Next on the cluster (de-risk cheaply, exactly as gen6):** ① `train_ac.job` (oracle canary
+then train). ② `diagnose_ac.job` — cos high / x0_RMSD small at all σ = the data-sufficiency
+verdict for 10 structures; a mid-σ dead zone = too few structures/too broad → get more data.
+Watch the held-out-vs-training gap for overfitting the 10. ③ `sweep_ac.job` — sp³% gen vs the
+91.9 ± 3.2 reference, multi-seed spread + SOAP memorization (with 10 points the real risk is
+memorizing them — want NEW structures at the right sp³%, not copies), MACE energy secondary.
+Retune `langevin_step_lr` if sp³% under/overshoots; use SDEdit for the actual augmentation runs.
+DFT is the arbiter for any structures fed back into MLIP training.
+
 ## Objective
 Build an E(3)-equivariant diffusion model that generates amorphous In₂O₃ atomic
 structures by **inpainting** (freeze "context" atoms, generate "mobile" ones),

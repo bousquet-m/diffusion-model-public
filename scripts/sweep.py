@@ -28,8 +28,8 @@ import torch
 from ase import Atoms
 from ase.data import atomic_numbers
 
-from insite_diff.analysis import coordination, plots, similarity
-from insite_diff.analysis.rdf import all_partials, first_peak
+from insite_diff.analysis import carbon, coordination, plots, similarity
+from insite_diff.analysis.rdf import all_partials, first_peak, partial_rdf
 from insite_diff.config import load_config
 from insite_diff.data.dataset import build_datasets
 from insite_diff.data.graph import build_graph_torch
@@ -41,8 +41,17 @@ from insite_diff.sampling.inpaint import inpaint_dispatch
 from insite_diff.training.trainer import load_model
 from insite_diff.utils import seed_everything, select_device
 
-Z_IN, Z_O = atomic_numbers["In"], atomic_numbers["O"]
+Z_IN, Z_O, Z_C = atomic_numbers["In"], atomic_numbers["O"], atomic_numbers["C"]
 DEFAULT_LADDER = [0.016, 0.05, 0.10, 0.20, 0.30, 0.50, 1.0]
+
+
+def _is_carbon(cfg) -> bool:
+    """a-C run: single carbon species. Selects the sp2/sp3 metric over the In-O one."""
+    return cfg.data.species == ["C"]
+
+
+def _soap_species(cfg):
+    return ("C",) if _is_carbon(cfg) else ("In", "O")
 
 
 def _atoms(numbers, positions, cell):
@@ -94,7 +103,9 @@ def _seeds_for_structure(cfg, model, item, mask_frac, device, n_seeds):
 
 
 def run_fraction(cfg, model, val_ds, mask_frac, device, args, train_desc):
-    rmax, nbins, cn = cfg.validation.rdf_rmax, cfg.validation.rdf_bins, cfg.validation.cn_cutoff_ino
+    carbon_run = _is_carbon(cfg)
+    rmax, nbins = cfg.validation.rdf_rmax, cfg.validation.rdf_bins
+    cn = cfg.validation.cn_cutoff_cc if carbon_run else cfg.validation.cn_cutoff_ino
     gen_frames, ref_frames, masks = [], [], []
     spreads = []
     for i in range(min(args.n_structures, len(val_ds))):
@@ -111,22 +122,37 @@ def run_fraction(cfg, model, val_ds, mask_frac, device, args, train_desc):
               f"spread={spreads[-1]:.3f} A")
 
     restrict = "both_mobile" if mask_frac < 1.0 else "all"
-    gen_rdf = all_partials(gen_frames, Z_IN, Z_O, rmax, nbins, masks, restrict=restrict)
-    ref_rdf = all_partials(ref_frames, Z_IN, Z_O, rmax, nbins, masks, restrict=restrict)
     cmo = mask_frac < 1.0
-    gen_c = coordination.summary(gen_frames, Z_IN, Z_O, cn, masks, center_mobile_only=cmo)
-    ref_c = coordination.summary(ref_frames, Z_IN, Z_O, cn, masks, center_mobile_only=cmo)
-    nn_sim = similarity.memorization_similarity(gen_frames, masks, train_desc)
-
+    nn_sim = similarity.memorization_similarity(gen_frames, masks, train_desc,
+                                                species=_soap_species(cfg))
     result = {
         "mask_frac": mask_frac,
         "n_samples": len(gen_frames),
-        "In-O_peak": {"gen": first_peak(*gen_rdf["In-O"]), "ref": first_peak(*ref_rdf["In-O"])},
-        "mean_In-O_bond": {"gen": gen_c["mean_bond"], "ref": ref_c["mean_bond"]},
-        "mean_In-O_coordination": {"gen": gen_c["mean_cn"], "ref": ref_c["mean_cn"]},
         "multiseed_spread_rmsd": float(np.mean(spreads)),
         "memorization_nn_similarity": {"mean": float(nn_sim.mean()), "max": float(nn_sim.max())},
     }
+
+    if carbon_run:
+        # a-C: C-C RDF first peak + the sp2/sp3 hybridization metric (mobile atoms), gen vs
+        # the like-masked reference. sp3% is judged as a DISTRIBUTION (mean AND spread).
+        gen_rdf = partial_rdf(gen_frames, Z_C, Z_C, rmax, nbins, masks, restrict)
+        ref_rdf = partial_rdf(ref_frames, Z_C, Z_C, rmax, nbins, masks, restrict)
+        gen_c = carbon.summary(gen_frames, cn, masks, center_mobile_only=cmo)
+        ref_c = carbon.summary(ref_frames, cn, masks, center_mobile_only=cmo)
+        result["CC_peak"] = {"gen": first_peak(*gen_rdf, lo=1.0, hi=2.0),
+                             "ref": first_peak(*ref_rdf, lo=1.0, hi=2.0)}
+        result["sp3_pct"] = {"gen_mean": gen_c["sp3_mean"], "gen_std": gen_c["sp3_std"],
+                             "ref_mean": ref_c["sp3_mean"], "ref_std": ref_c["sp3_std"]}
+        result["sp2_pct"] = {"gen_mean": gen_c["sp2_mean"], "ref_mean": ref_c["sp2_mean"]}
+        result["mean_C_coordination"] = {"gen": gen_c["mean_cn"], "ref": ref_c["mean_cn"]}
+    else:
+        gen_rdf = all_partials(gen_frames, Z_IN, Z_O, rmax, nbins, masks, restrict=restrict)
+        ref_rdf = all_partials(ref_frames, Z_IN, Z_O, rmax, nbins, masks, restrict=restrict)
+        gen_c = coordination.summary(gen_frames, Z_IN, Z_O, cn, masks, center_mobile_only=cmo)
+        ref_c = coordination.summary(ref_frames, Z_IN, Z_O, cn, masks, center_mobile_only=cmo)
+        result["In-O_peak"] = {"gen": first_peak(*gen_rdf["In-O"]), "ref": first_peak(*ref_rdf["In-O"])}
+        result["mean_In-O_bond"] = {"gen": gen_c["mean_bond"], "ref": ref_c["mean_bond"]}
+        result["mean_In-O_coordination"] = {"gen": gen_c["mean_cn"], "ref": ref_c["mean_cn"]}
 
     if args.mace:
         from insite_diff.analysis.mace_relax import (load_calculator, nvt_refine,
@@ -153,11 +179,19 @@ def run_fraction(cfg, model, val_ds, mask_frac, device, args, train_desc):
                                   seed=cfg.seed + i)[0] for i, a in enumerate(gen_frames)]
             rec["gen_after_nvt"] = float(np.mean([potential_energy(a, calc) / len(a)
                                                   for a in refined]))
-            nvt_rdf = all_partials(refined, Z_IN, Z_O, rmax, nbins, masks, restrict=restrict)
-            nvt_c = coordination.summary(refined, Z_IN, Z_O, cn, masks, center_mobile_only=cmo)
-            result["In-O_peak"]["gen_nvt"] = first_peak(*nvt_rdf["In-O"])
-            result["mean_In-O_bond"]["gen_nvt"] = nvt_c["mean_bond"]
-            result["mean_In-O_coordination"]["gen_nvt"] = nvt_c["mean_cn"]
+            if carbon_run:
+                nvt_rdf = partial_rdf(refined, Z_C, Z_C, rmax, nbins, masks, restrict)
+                nvt_c = carbon.summary(refined, cn, masks, center_mobile_only=cmo)
+                result["CC_peak"]["gen_nvt"] = first_peak(*nvt_rdf, lo=1.0, hi=2.0)
+                result["sp3_pct"]["gen_nvt_mean"] = nvt_c["sp3_mean"]
+                result["sp3_pct"]["gen_nvt_std"] = nvt_c["sp3_std"]
+                result["mean_C_coordination"]["gen_nvt"] = nvt_c["mean_cn"]
+            else:
+                nvt_rdf = all_partials(refined, Z_IN, Z_O, rmax, nbins, masks, restrict=restrict)
+                nvt_c = coordination.summary(refined, Z_IN, Z_O, cn, masks, center_mobile_only=cmo)
+                result["In-O_peak"]["gen_nvt"] = first_peak(*nvt_rdf["In-O"])
+                result["mean_In-O_bond"]["gen_nvt"] = nvt_c["mean_bond"]
+                result["mean_In-O_coordination"]["gen_nvt"] = nvt_c["mean_cn"]
         result["energy_per_atom"] = rec
     return result
 
@@ -182,6 +216,10 @@ def main():
     ap.add_argument("--langevin-step-lr", type=float, default=None)
     ap.add_argument("--langevin-steps", type=int, default=None)
     ap.add_argument("--refine-steps", type=int, default=None)
+    # SDEdit augmentation (VE): start the anneal from a real structure + this much noise,
+    # iterating only the ladder <= this sigma. The similarity<->diversity dial for making
+    # "more like these 10" without wandering off-distribution. 0/None = full generation.
+    ap.add_argument("--sdedit-sigma", type=float, default=None)
     # MACE NVT post-refinement (step 4). --nvt-steps > 0 (with --mace) runs a short NVT MD +
     # 0 K quench on each generated frame and reports post-refinement coordination/bond/energy,
     # so we can see whether it closes the under-coordination. None = keep config value.
@@ -202,6 +240,8 @@ def main():
         cfg.diffusion.langevin_steps = args.langevin_steps
     if args.refine_steps is not None:
         cfg.diffusion.refine_steps = args.refine_steps
+    if args.sdedit_sigma is not None:
+        cfg.diffusion.sdedit_sigma = args.sdedit_sigma
     if args.nvt_steps is not None:
         cfg.mace.nvt_steps = args.nvt_steps
     if args.nvt_temp is not None:
@@ -227,34 +267,68 @@ def main():
     train_frames = [_atoms(train_ds[i]["numbers"].numpy(), train_ds[i]["positions"].numpy(),
                            train_ds[i]["cell"].numpy()) for i in range(k)]
     print(f"[sweep] building SOAP environment bank from {k} training structures...")
-    train_desc = similarity.atom_environments(train_frames, masks=None, max_envs=args.max_envs)
+    train_desc = similarity.atom_environments(train_frames, masks=None,
+                                              species=_soap_species(cfg), max_envs=args.max_envs)
+
+    # a-C: the reference sp3% DISTRIBUTION (mean + spread) over ALL real structures — the
+    # target the generated structures must reproduce. Computed once, reported for context.
+    ref_dist = None
+    if _is_carbon(cfg):
+        all_real = [_atoms(ds[i]["numbers"].numpy(), ds[i]["positions"].numpy(), ds[i]["cell"].numpy())
+                    for ds in (train_ds, val_ds) for i in range(len(ds))]
+        rc = carbon.summary(all_real, cfg.validation.cn_cutoff_cc)
+        ref_dist = {"sp3_mean": rc["sp3_mean"], "sp3_std": rc["sp3_std"],
+                    "sp2_mean": rc["sp2_mean"], "mean_cn": rc["mean_cn"], "n_structures": len(all_real)}
+        print(f"[sweep] a-C reference (n={ref_dist['n_structures']}): "
+              f"sp3% = {ref_dist['sp3_mean']:.1f} +/- {ref_dist['sp3_std']:.1f}, "
+              f"mean C-coordination = {ref_dist['mean_cn']:.2f}")
 
     results = []
     for frac in fractions:
         print(f"[sweep] mask_frac = {frac}")
         res = run_fraction(cfg, model, val_ds, frac, device, args, train_desc)
         results.append(res)
+        if _is_carbon(cfg):
+            print(f"[sweep]   frac={frac}: sp3% gen {res['sp3_pct']['gen_mean']:.1f}+/-"
+                  f"{res['sp3_pct']['gen_std']:.1f} vs ref {res['sp3_pct']['ref_mean']:.1f}+/-"
+                  f"{res['sp3_pct']['ref_std']:.1f} | spread {res['multiseed_spread_rmsd']:.2f} A "
+                  f"| memNN {res['memorization_nn_similarity']['mean']:.4f}")
         with open(os.path.join(args.out, f"summary_{frac}.json"), "w") as f:
             json.dump(res, f, indent=2)
 
     # combined plot
-    panels = {
-        "In-O first peak (mobile)": {"gen": [r["In-O_peak"]["gen"] for r in results],
-                                     "ref": [r["In-O_peak"]["ref"] for r in results], "ylabel": "A"},
-        "mean In-O bond (mobile)": {"gen": [r["mean_In-O_bond"]["gen"] for r in results],
-                                    "ref": [r["mean_In-O_bond"]["ref"] for r in results], "ylabel": "A"},
-        "mean In-O coordination": {"gen": [r["mean_In-O_coordination"]["gen"] for r in results],
-                                   "ref": [r["mean_In-O_coordination"]["ref"] for r in results], "ylabel": "CN"},
-        "multi-seed spread": {"gen": [r["multiseed_spread_rmsd"] for r in results], "ylabel": "RMSD (A)"},
-        "memorization (NN SOAP sim)": {"gen": [r["memorization_nn_similarity"]["mean"] for r in results],
-                                       "ylabel": "cosine"},
-    }
+    if _is_carbon(cfg):
+        panels = {
+            "C-C first peak (mobile)": {"gen": [r["CC_peak"]["gen"] for r in results],
+                                        "ref": [r["CC_peak"]["ref"] for r in results], "ylabel": "A"},
+            "sp3 % (mean)": {"gen": [r["sp3_pct"]["gen_mean"] for r in results],
+                             "ref": [r["sp3_pct"]["ref_mean"] for r in results], "ylabel": "%"},
+            "sp3 % spread (std)": {"gen": [r["sp3_pct"]["gen_std"] for r in results],
+                                   "ref": [r["sp3_pct"]["ref_std"] for r in results], "ylabel": "%"},
+            "mean C coordination": {"gen": [r["mean_C_coordination"]["gen"] for r in results],
+                                    "ref": [r["mean_C_coordination"]["ref"] for r in results], "ylabel": "CN"},
+            "multi-seed spread": {"gen": [r["multiseed_spread_rmsd"] for r in results], "ylabel": "RMSD (A)"},
+            "memorization (NN SOAP sim)": {"gen": [r["memorization_nn_similarity"]["mean"] for r in results],
+                                           "ylabel": "cosine"},
+        }
+    else:
+        panels = {
+            "In-O first peak (mobile)": {"gen": [r["In-O_peak"]["gen"] for r in results],
+                                         "ref": [r["In-O_peak"]["ref"] for r in results], "ylabel": "A"},
+            "mean In-O bond (mobile)": {"gen": [r["mean_In-O_bond"]["gen"] for r in results],
+                                        "ref": [r["mean_In-O_bond"]["ref"] for r in results], "ylabel": "A"},
+            "mean In-O coordination": {"gen": [r["mean_In-O_coordination"]["gen"] for r in results],
+                                       "ref": [r["mean_In-O_coordination"]["ref"] for r in results], "ylabel": "CN"},
+            "multi-seed spread": {"gen": [r["multiseed_spread_rmsd"] for r in results], "ylabel": "RMSD (A)"},
+            "memorization (NN SOAP sim)": {"gen": [r["memorization_nn_similarity"]["mean"] for r in results],
+                                           "ylabel": "cosine"},
+        }
     if args.mace:
         panels["energy/atom"] = {"gen": [r["energy_per_atom"]["gen_before"] for r in results],
                                  "ref": [r["energy_per_atom"]["ref"] for r in results], "ylabel": "eV"}
     plots.plot_sweep(fractions, panels, os.path.join(args.out, "sweep.png"))
     with open(os.path.join(args.out, "sweep.json"), "w") as f:
-        json.dump({"fractions": fractions, "results": results}, f, indent=2)
+        json.dump({"fractions": fractions, "results": results, "reference_distribution": ref_dist}, f, indent=2)
     print(f"[sweep] wrote {len(results)} fractions + sweep.png to {args.out}/")
 
 

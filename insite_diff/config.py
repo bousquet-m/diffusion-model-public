@@ -114,6 +114,11 @@ class DiffusionConfig:
     langevin_steps: int = 10        # Langevin steps per sigma level
     langevin_step_lr: float = 2.0e-5  # NCSN base step size (scaled by (sigma/sigma_min)^2)
     refine_steps: int = 100         # final no-external-noise refinement at sigma_min
+    # SDEdit-style partial noising (sampling-time only, VE). 0 disables (full uniform-prior
+    # generation from sigma_max). > 0 starts the anneal from a real structure + this much
+    # noise, at the ladder level nearest this sigma — a similarity<->diversity dial for
+    # augmentation from few training structures. Must be <= sigma_max.
+    sdedit_sigma: float = 0.0
     # --- shared ---
     com_free: bool = True
     pbc_aware: bool = True
@@ -193,6 +198,7 @@ class ValidationConfig:
     rdf_rmax: float = 6.0
     rdf_bins: int = 240
     cn_cutoff_ino: float = 2.7      # In-O coordination cutoff (~first RDF minimum)
+    cn_cutoff_cc: float = 1.95      # C-C coordination cutoff for the a-C sp2/sp3 metric
     tolerances: ValidationTolerances = field(default_factory=ValidationTolerances)
 
 

@@ -1,0 +1,55 @@
+# Fast CPU smoke for the amorphous-carbon (a-C) recipe — plumbing check, ~seconds.
+# Requires the relabelled data: run `python scripts/preprocess_ac.py` first (H->C + unique ids).
+seed: 0
+device: cpu
+
+data:
+  sources:
+    - {path: /Users/matt/Desktop/data/aC/aC.extxyz, role: train_val}
+  traj_id_regex: 'config_type=(\S+)'
+  species: [C]
+  stride: 1
+  dedup_rmsd: 0.0
+
+split: {by: trajectory, val_fraction: 0.2, val_source_roles: [train_val], seed: 0}
+graph: {cutoff: 2.5, max_neighbors: 40}
+mask: {mask_frac: 0.1, geometry: sphere, center: box_center, slab_axis: 2, slab_side: top}
+
+diffusion:
+  type: ve
+  sigma_min: 0.01
+  sigma_max: 0.60
+  n_sigma_levels: 20
+  langevin_steps: 2
+  langevin_step_lr: 1.0e-4
+  refine_steps: 5
+  sdedit_sigma: 0.0
+
+model:
+  name: e3nn_denoiser
+  n_layers: 2
+  hidden_irreps: "8x0e + 4x1o"
+  sh_lmax: 1
+  radial_basis: 4
+  sigma_embed_dim: 8
+  tp_mode: uvu
+
+train:
+  batch_size: 2
+  lr: 1.0e-3
+  max_steps: 20
+  ema_decay: 0.0
+  loss: dsm
+  checkpoint_dir: checkpoints/smoke_ac
+  ckpt_every: 10
+  log_dir: runs/smoke_ac
+  log_every: 5
+  val_every: 10
+
+sampling: {num_steps: 1000, n_resample: 2, n_samples: 2}
+mace: {model_path: /Users/matt/Desktop/data/aC/mace-aC-finetune.model, relax_fmax: 0.1, relax_steps: 2}
+validation:
+  rdf_rmax: 6.0
+  rdf_bins: 120
+  cn_cutoff_cc: 1.95
+  tolerances: {rdf_peak_A: 0.2, mean_bond_A: 0.1}

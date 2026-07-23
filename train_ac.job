@@ -1,0 +1,62 @@
+#!/bin/bash
+# amorphous-carbon (a-C) training: gen6's VE machinery on a NEW MATERIAL (see configs/ac.yaml).
+#
+# Same method as gen6 (VE + annealed Langevin + uniform prior + uvu E(3) denoiser); only the
+# material-specific knobs move. 10 independent 216-atom AIMD a-C snapshots are the ENTIRE
+# training set, so this run also tests data-sufficiency — read diagnose_ac.job after it.
+#
+# Job scripts live in the repo on purpose (clone -> sbatch, never hand-edit paths on the
+# cluster). Setup:
+#   mkdir -p /scratch/midway3/bousquet/diffusion/amorphous-carbon
+#   cd /scratch/midway3/bousquet/diffusion/amorphous-carbon
+#   git clone -b amorphous-carbon https://github.com/bousquet-m/diffusion-model-public.git
+#   cd diffusion-model-public
+#   mkdir -p logs checkpoints/ac        # REQUIRED before submit: --output cannot create logs/
+#   sbatch train_ac.job
+#
+# Runtime: 30k uvu steps on 216-atom cells — minutes, not hours (4 h is slack, not a forecast).
+#SBATCH --job-name=insite-train-ac
+#SBATCH --account=pi-gagalli
+#SBATCH --partition=gagalli-gpu
+#SBATCH --qos=gagalli-gpu
+#SBATCH --constraint=A100
+#SBATCH --time=04:00:00
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --ntasks-per-node=1          # ONE trainer process
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --mail-user=bousquet@uchicago.edu
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --output=logs/%x-%j.out
+
+set -euo pipefail
+module load python/miniforge-25.3.0 cuda/12.2 cudnn mkl/2024.2
+source activate /project2/gagalli/bousquet/envs/insite-diff
+
+cd /scratch/midway3/bousquet/diffusion/amorphous-carbon/diffusion-model-public
+export PYTHONPATH=.
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
+
+AC=/scratch/midway3/bousquet/diffusion/aC
+STRUCT=$AC/aC.extxyz
+
+echo "host=$(hostname)"
+python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+echo "code: $(git rev-parse --short HEAD)"
+
+# STEP 0 (idempotent): relabel the raw H->C snapshots and give each a unique trajectory id.
+# The raw column says "H" but the atoms are carbon (density ~3.3 g/cc proves it); without this
+# the data is chemically wrong AND all 10 share config_type=ac_325 (one trajectory -> no split).
+python scripts/preprocess_ac.py --src "$AC/extxyz" --out "$STRUCT"
+
+# STEP 1 (canary): the model-free VE oracle test confirms the formulation on an a-C structure
+# BEFORE training. Oracle should reconstruct (RMSD~0); the zero control should stay box-filled
+# (spread~1), not collapse. If this fails, do not train.
+echo; echo "################ oracle (VE formulation check) ################"
+python scripts/oracle_test.py --structure "$STRUCT" --type ve \
+    --sigma-max 0.60 --n-levels 500
+
+# STEP 2: train.
+echo; echo "################ train ################"
+python scripts/train.py --config configs/ac.yaml

@@ -1,0 +1,66 @@
+#!/bin/bash
+# a-C physical verdict: sp2/sp3 hybridization vs the 10-structure reference distribution,
+# multi-seed diversity, and SOAP memorization (the real risk with only 10 training points).
+#
+# PRIMARY metric is structural and potential-free: sp3% (mean AND spread) of the generated
+# structures vs the reference (mean 91.9, std 3.2 over the 10 AIMD snapshots). SUCCESS =
+# reproduce that distribution at the right density, DIVERSE (multi-seed spread well above 0,
+# low SOAP self-similarity), holding up under DFT. MACE energy (--mace) is a SECONDARY sanity
+# check only: this is the same finetuned MLIP that fails to reproduce the distribution
+# dynamically, which is the whole reason for the diffusion model.
+#
+# --config MUST be ac.yaml (sweep.py reads diffusion.type from the config, not the checkpoint;
+# see HANDOFF "SWEEP FOOTGUN"). ac.yaml is uvu, so this sweep is cheap (gen6-class), not gen5-slow.
+#
+# CANARY FIRST — ~2-3 min, exercises every stage (ve_inpaint on CUDA, C-C RDF / sp3 metric /
+# SOAP, MACE, writers) before committing to the full ladder:
+#   python scripts/sweep.py --config configs/ac.yaml --checkpoint checkpoints/ac/final.pt \
+#       --fractions 1.0 --n-structures 1 --n-seeds 2 --train-sample 8 \
+#       --out outputs/canary_ac --mace
+#
+#   cd /scratch/midway3/bousquet/diffusion/amorphous-carbon/diffusion-model-public
+#   git pull; mkdir -p logs
+#   sbatch sweep_ac.job
+#SBATCH --job-name=insite-sweep-ac
+#SBATCH --account=pi-gagalli
+#SBATCH --partition=gagalli-gpu
+#SBATCH --qos=gagalli-gpu
+#SBATCH --constraint=A100
+#SBATCH --time=04:00:00
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --mail-user=bousquet@uchicago.edu
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --output=logs/%x-%j.out
+
+set -euo pipefail
+module load python/miniforge-25.3.0 cuda/12.2 cudnn mkl/2024.2
+source activate /project2/gagalli/bousquet/envs/insite-diff
+
+cd /scratch/midway3/bousquet/diffusion/amorphous-carbon/diffusion-model-public
+export PYTHONPATH=.
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
+
+echo "host=$(hostname)"
+python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+echo "code: $(git rev-parse --short HEAD)"
+
+# Full uniform-prior generation across the mask_frac ladder. With only 10 structures, watch the
+# memorization panel and the multi-seed spread at frac=1.0: we want NEW structures at the right
+# sp3%, not copies of the 10.
+python scripts/sweep.py --config configs/ac.yaml --checkpoint checkpoints/ac/final.pt \
+    --n-structures 2 --n-seeds 10 --train-sample 8 --out outputs/sweep_ac --mace
+
+# --- SDEdit augmentation (the recommended way to make "more like these 10") --------------------
+# Start the anneal from a real structure + intermediate-sigma noise instead of the uniform prior;
+# lower --sdedit-sigma = closer to the seed. This is the low-risk dial for staying on-distribution
+# with few training points. Sweep frac=1.0 (whole structure) at a few noise levels:
+for S in 0.15 0.30 0.45; do
+  echo; echo "################ SDEdit augmentation: start_sigma=$S ################"
+  python scripts/sweep.py --config configs/ac.yaml --checkpoint checkpoints/ac/final.pt \
+      --fractions 1.0 --n-structures 2 --n-seeds 10 --train-sample 8 \
+      --sdedit-sigma "$S" --out "outputs/sdedit_ac_${S}" --mace
+done
