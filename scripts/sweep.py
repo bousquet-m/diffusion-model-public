@@ -158,7 +158,7 @@ def run_fraction(cfg, model, val_ds, mask_frac, device, args, train_desc):
         from insite_diff.analysis.mace_relax import (load_calculator, nvt_refine,
                                                      potential_energy, relax)
         dev = "cuda" if getattr(device, "type", "") == "cuda" else "cpu"
-        calc = load_calculator(cfg.mace.model_path, device=dev)
+        calc = load_calculator(cfg.mace.model_path, device=dev, head=cfg.mace.head)
         e_gen = [potential_energy(a, calc) / len(a) for a in gen_frames]
         e_ref = [potential_energy(a, calc) / len(a) for a in ref_frames]
         rec = {"gen_before": float(np.mean(e_gen)), "ref": float(np.mean(e_ref))}

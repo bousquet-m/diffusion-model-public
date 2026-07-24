@@ -177,6 +177,9 @@ class SamplingConfig:
 @dataclass
 class MaceConfig:
     model_path: str = ""
+    # Multi-head potentials (e.g. the a-C finetune) require naming the head to evaluate;
+    # single-head / 'Default'-head models (the In2O3 scan_v3_swa) leave this empty.
+    head: str = ""
     relax_fmax: float = 0.05
     relax_steps: int = 200
     # NVT post-refinement (step 4). NVT only — the potential is not reliable for the

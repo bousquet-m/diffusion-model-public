@@ -47,7 +47,7 @@ train:
   val_every: 10
 
 sampling: {num_steps: 1000, n_resample: 2, n_samples: 2}
-mace: {model_path: /Users/matt/Desktop/data/aC/mace-aC-finetune.model, relax_fmax: 0.1, relax_steps: 2}
+mace: {model_path: /Users/matt/Desktop/data/aC/mace-aC-finetune.model, head: weaver-PBE, relax_fmax: 0.1, relax_steps: 2}
 validation:
   rdf_rmax: 6.0
   rdf_bins: 120

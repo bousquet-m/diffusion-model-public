@@ -32,11 +32,19 @@ def _force_jit_map_location(device: str):
         torch.jit.load = orig
 
 
-def load_calculator(model_path: str, device: str = "cpu", dtype: str = "float32"):
-    """Load the MACE potential as an ASE calculator (CPU by default)."""
+def load_calculator(model_path: str, device: str = "cpu", dtype: str = "float32",
+                    head: str = ""):
+    """Load the MACE potential as an ASE calculator (CPU by default).
+
+    ``head`` names which head to evaluate for a multi-head potential (e.g. the a-C
+    finetune exposes deringer-LDA / drautz-PBE / weaver-PBE / replay and has no
+    'default'). Leave empty for single-head models (MACE picks the sole/'Default' head).
+    """
     from mace.calculators import MACECalculator
+    kwargs = {"head": head} if head else {}
     with _force_jit_map_location(device):
-        return MACECalculator(model_paths=model_path, device=device, default_dtype=dtype)
+        return MACECalculator(model_paths=model_path, device=device, default_dtype=dtype,
+                              **kwargs)
 
 
 def potential_energy(atoms: Atoms, calc) -> float:

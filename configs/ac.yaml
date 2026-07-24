@@ -90,6 +90,7 @@ sampling:
 
 mace:
   model_path: /scratch/midway3/bousquet/diffusion/aC/mace-aC-finetune.model
+  head: weaver-PBE                  # multi-head finetune (deringer-LDA/drautz-PBE/weaver-PBE/replay), no default
   relax_fmax: 0.05
   relax_steps: 200
   # NVT post-refinement (step 4) — NVT only (no NPT: potential unreliable for cell dynamics).
