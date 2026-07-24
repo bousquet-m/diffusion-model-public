@@ -1,0 +1,71 @@
+#!/bin/bash
+# a-C SAMPLING-ONLY screen — reuses the EXISTING checkpoints/ac/final.pt (no retraining).
+#
+# Context (ac1 run): the model learned (clean diagnose, generalizes to held-out) but the
+# annealed-Langevin sampler yields sp2-rich structures: sp3 ~74% vs ref ~92%, mean CN 3.78
+# vs 3.94, C-C peak 1.49 vs 1.54 A, energy +500 meV/atom. A 0 K MACE quench drops energy
+# ~270 meV but does NOT recover sp3 (it settles into the nearby sp2-rich minimum) -> this is
+# a topology problem the sampler must fix, not simple under-relaxation. Diagnose root cause:
+# at sigma_max the score is under-predicted ~4x (cos 0.26, ratio 0.27), so the anneal never
+# commits to the tetrahedral network.
+#
+# This job screens the two cheap, no-retrain levers:
+#   A) Langevin knobs — more steps / larger step_lr, giving the weak high-sigma score more
+#      iterations and drift to reach sp3. (sampling only)
+#   B) MACE NVT line-search — finite-T MD + quench to climb OUT of the sp2 basin. The quench
+#      evidence says NVT needs real temperature to break/reform bonds; too high melts. Watch
+#      for sp3 UP and energy DOWN together.
+# The retrain levers (sigma_max, capacity) are in screen_ac.job.
+#
+#   cd /scratch/midway3/bousquet/diffusion/amorphous-carbon/diffusion-model-public
+#   git pull; mkdir -p logs                     # needs checkpoints/ac/final.pt from the train run
+#   sbatch tune_ac.job
+#   # then: python scripts/collect_ac.py outputs/tune_ac   (and outputs/nvt_ac)
+#SBATCH --job-name=insite-tune-ac
+#SBATCH --account=pi-gagalli
+#SBATCH --partition=gagalli-gpu
+#SBATCH --qos=gagalli-gpu
+#SBATCH --constraint=A100
+#SBATCH --time=04:00:00
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --mail-user=bousquet@uchicago.edu
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --output=logs/%x-%j.out
+
+set -euo pipefail
+module load python/miniforge-25.3.0 cuda/12.2 cudnn mkl/2024.2
+source activate /project2/gagalli/bousquet/envs/insite-diff
+
+cd /scratch/midway3/bousquet/diffusion/amorphous-carbon/diffusion-model-public
+export PYTHONPATH=.
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
+
+CK=checkpoints/ac/final.pt
+echo "host=$(hostname)"; python -c "import torch; print('cuda:', torch.cuda.is_available())"
+echo "code: $(git rev-parse --short HEAD)"
+
+# --- A) Langevin grid (no MACE; sp3 is potential-free) --------------------------------------
+for LR in 1.0e-4 2.0e-4 3.0e-4; do
+  for NS in 5 10 20; do
+    OUT="outputs/tune_ac/lr${LR}_ns${NS}"
+    echo; echo "################ Langevin: step_lr=$LR steps=$NS ################"
+    python scripts/sweep.py --config configs/ac.yaml --checkpoint "$CK" \
+        --fractions 1.0 --n-structures 2 --n-seeds 6 --train-sample 8 \
+        --langevin-step-lr "$LR" --langevin-steps "$NS" --out "$OUT"
+  done
+done
+
+# --- B) MACE NVT temperature line-search (needs --mace; MACE-heavy) --------------------------
+for T in 600 800 1000 1200; do
+  OUT="outputs/nvt_ac/T${T}"
+  echo; echo "################ NVT refine: T=${T}K, 200 steps ################"
+  python scripts/sweep.py --config configs/ac.yaml --checkpoint "$CK" \
+      --fractions 1.0 --n-structures 1 --n-seeds 3 --train-sample 8 --mace \
+      --nvt-steps 200 --nvt-temp "$T" --out "$OUT"
+done
+
+echo; echo "collect with: python scripts/collect_ac.py outputs/tune_ac ; python scripts/collect_ac.py outputs/nvt_ac"

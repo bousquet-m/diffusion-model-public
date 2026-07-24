@@ -1,0 +1,108 @@
+# ac_cap_s09: a-C hyperparameter-screen variant, generated from ac.yaml by
+# scripts/make_ac_variants.py (edits: [('sigma_max: 0.60', 'sigma_max: 0.90'), ('hidden_irreps: "64x0e + 32x1o + 8x2e"', 'hidden_irreps: "128x0e + 64x1o + 16x2e"')]). Do not hand-edit; regenerate.
+# ac: amorphous carbon (a-C) on the gen6 VE machinery. NEW MATERIAL, SAME method.
+#
+# Everything structural carries over from gen6 unchanged — VE + annealed Langevin +
+# uniform-in-cell prior + uvu E(3) denoiser. Only the material-specific knobs move:
+#
+#   - species [C]: single-species. Data is 10 independent 216-atom AIMD snapshots of a-C
+#     at 3.25 g/cc (boxes 10.86-10.97 A), relabelled H->C and given unique trajectory ids
+#     by scripts/preprocess_ac.py (the raw column says "H" but the density proves carbon).
+#   - graph.cutoff 5.0 -> 2.5: the box is ~10.88 A, so box/2 = 5.43 A and the receptive
+#     field cutoff*n_layers must stay under it. 2.5*2 = 5.0 A < 5.43 (gen6's 5.0*2=10 would
+#     wrap this small a cell). avg_neighbors at 2.5 A is ~9 on this data (sane). NOTE this
+#     is the message-passing cutoff, SEPARATE from the metric's C-C rcut=1.95 A.
+#   - sigma_max 0.75 -> 0.60: C-C bonds (~1.5 A) are shorter than In-O (~2.15 A), so the max
+#     physical noise is scaled down to keep it sub-bond (0.60/1.5 ~ 0.75/2.15). Still <= 0.75.
+#   - single density -> one source, no multi-source weighting.
+#   - mace/DFT: mace-aC-finetune.model loads through the existing --mace path unchanged, BUT
+#     it is the same finetuned MLIP that fails to reproduce this distribution dynamically, so
+#     energies are a SECONDARY sanity check. The PRIMARY verdict is the sp2/sp3 metric.
+#
+# De-risk exactly as gen6: oracle_test.py --type ve -> short train + diagnose.py (the
+# data-sufficiency verdict for only 10 structures) -> sweep sp3% gen vs the reference
+# distribution (mean 91.9, std 3.2) with multi-seed spread + SOAP memorization.
+seed: 0
+device: auto
+
+data:
+  sources:
+    - {path: /scratch/midway3/bousquet/diffusion/aC/aC.extxyz, role: train_val}
+  traj_id_regex: 'config_type=(\S+)'
+  species: [C]
+  stride: 1
+  dedup_rmsd: 0.0                  # 10 independent snapshots — nothing to dedup
+
+split:
+  by: trajectory
+  val_fraction: 0.2                # 2 of 10 snapshots held out (see a-C handoff)
+  val_source_roles: [train_val]
+  seed: 0
+
+graph:
+  cutoff: 2.5                       # RF = cutoff * n_layers = 5.0 A < box/2 (5.43 A). avgN~9.
+  max_neighbors: 40
+
+mask:
+  mask_frac: 0.10
+  geometry: sphere
+  center: box_center
+  slab_axis: 2
+  slab_side: top
+
+diffusion:
+  type: ve
+  sigma_min: 0.01                  # A
+  sigma_max: 0.90                  # A — scaled below gen6's 0.75 for the shorter C-C bond
+  n_sigma_levels: 500
+  langevin_steps: 5                # 500*5 = 2500 anneal steps
+  langevin_step_lr: 1.0e-4         # gen6's tuned value; retune here if the sp3% under/overshoots
+  refine_steps: 100
+  # SDEdit augmentation (sampling-time only; ignored during training and by uniform-prior
+  # generation). When sdedit_sigma > 0, ve_inpaint/annealed_langevin start the ladder at the
+  # nearest level to this sigma from a real structure + that much noise, instead of sigma_max
+  # from the uniform prior. Lower sigma = closer to the seed (more similar, less diverse).
+  sdedit_sigma: 0.0
+
+model:                             # identical architecture to gen6 (uvu); only the material differs
+  name: e3nn_denoiser
+  n_layers: 2
+  hidden_irreps: "128x0e + 64x1o + 16x2e"
+  sh_lmax: 2
+  radial_basis: 8
+  sigma_embed_dim: 32
+  tp_mode: uvu
+
+train:
+  batch_size: 4                    # 8 training snapshots -> 2 batches/step
+  lr: 1.0e-3
+  max_steps: 30000
+  ema_decay: 0.999
+  loss: dsm
+  checkpoint_dir: checkpoints/ac_cap_s09
+  ckpt_every: 2500
+  log_dir: runs/ac_cap_s09
+  log_every: 50
+  val_every: 500
+
+sampling:
+  num_steps: 1000
+  n_resample: 8
+  n_samples: 8
+
+mace:
+  model_path: /scratch/midway3/bousquet/diffusion/aC/mace-aC-finetune.model
+  head: weaver-PBE                  # multi-head finetune (deringer-LDA/drautz-PBE/weaver-PBE/replay), no default
+  relax_fmax: 0.05
+  relax_steps: 200
+  # NVT post-refinement (step 4) — NVT only (no NPT: potential unreliable for cell dynamics).
+  nvt_temperature_K: 500.0
+  nvt_timestep_fs: 1.0
+  nvt_steps: 0                     # 0 = off; enable via sweep --nvt-steps (e.g. 200)
+  nvt_friction_per_fs: 0.01
+
+validation:
+  rdf_rmax: 6.0
+  rdf_bins: 240
+  cn_cutoff_cc: 1.95               # C-C coordination cutoff for the sp2/sp3 metric
+  tolerances: {rdf_peak_A: 0.1, mean_bond_A: 0.05}

@@ -1,0 +1,66 @@
+#!/bin/bash
+# a-C RETRAIN screen — the training-hyperparameter half of the sp3 investigation.
+#
+# ac1 showed the model learns but under-shoots sp3 (74% vs 92%) because the anneal can't
+# reach the tetrahedral network (score ~4x too weak at sigma_max; generated structures sit
+# in genuine sp2-rich minima). Before concluding 10 structures is too few, screen the two
+# training levers most likely to fix this (see scripts/make_ac_variants.py):
+#   ac_s09      sigma_max 0.6 -> 0.9   (larger max noise -> more bond-topology rearrangement)
+#   ac_s12      sigma_max 0.6 -> 1.2
+#   ac_cap      hidden 64/32/8 -> 128/64/16  (more capacity to sharpen the sp3 score)
+#   ac_cap_s09  both
+# Baseline (ac, sigma_max 0.6) is already trained — compare against outputs/sweep_ac.
+#
+# a-C training is minutes (216-atom cells, uvu), so four trainings + sweeps fit one job.
+#
+#   cd /scratch/midway3/bousquet/diffusion/amorphous-carbon/diffusion-model-public
+#   git pull; mkdir -p logs
+#   sbatch screen_ac.job
+#   # then: python scripts/collect_ac.py outputs/screen_ac
+#SBATCH --job-name=insite-screen-ac
+#SBATCH --account=pi-gagalli
+#SBATCH --partition=gagalli-gpu
+#SBATCH --qos=gagalli-gpu
+#SBATCH --constraint=A100
+#SBATCH --time=06:00:00
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --mail-user=bousquet@uchicago.edu
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --output=logs/%x-%j.out
+
+set -euo pipefail
+module load python/miniforge-25.3.0 cuda/12.2 cudnn mkl/2024.2
+source activate /project2/gagalli/bousquet/envs/insite-diff
+
+cd /scratch/midway3/bousquet/diffusion/amorphous-carbon/diffusion-model-public
+export PYTHONPATH=.
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
+
+AC=/scratch/midway3/bousquet/diffusion/aC
+STRUCT=$AC/aC.extxyz
+echo "host=$(hostname)"; python -c "import torch; print('cuda:', torch.cuda.is_available())"
+echo "code: $(git rev-parse --short HEAD)"
+
+# STEP 0 (idempotent): ensure the relabelled data exists.
+python scripts/preprocess_ac.py --src "$AC/extxyz" --out "$STRUCT"
+
+for CFG in ac_s09 ac_s12 ac_cap ac_cap_s09; do
+  echo; echo "################################ TRAIN $CFG ################################"
+  python scripts/train.py --config "configs/${CFG}.yaml"
+
+  echo; echo "---- diagnose $CFG (held-out frame 9): is sigma_max still the weak end? ----"
+  python scripts/diagnose.py --checkpoint "checkpoints/${CFG}/final.pt" \
+      --structure "$STRUCT" --frame 9 --device cuda --repeats 16
+
+  echo; echo "---- sweep $CFG (sp3 verdict; potential-free) ----"
+  python scripts/sweep.py --config "configs/${CFG}.yaml" \
+      --checkpoint "checkpoints/${CFG}/final.pt" \
+      --fractions 1.0,0.1 --n-structures 2 --n-seeds 8 --train-sample 8 \
+      --out "outputs/screen_ac/${CFG}"
+done
+
+echo; echo "collect with: python scripts/collect_ac.py outputs/screen_ac"

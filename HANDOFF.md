@@ -8,6 +8,40 @@ structures from the same distribution — the finetuned MLIP cannot reproduce th
 distribution via MD, and the diffusion model samples the structure distribution directly
 (no potential), so it can populate what MD can't.
 
+### a-C RESULTS (first cluster run, `ac1`) — model learned, SAMPLER under-shoots sp3
+First full run (train 30k steps + sweep + SDEdit, `mace.head=weaver-PBE`). Verdict: the
+model is sound but the sampler produces sp²-rich structures, and this is being SCREENED
+before concluding 10 structures is too few.
+- **Diagnose is healthy and generalizes.** cos peaks 0.90 at σ≈0.10, x0_RMSD small at every
+  σ; held-out frame (0.895) ≈ training frame (0.902) → **no overfitting, data sufficient to
+  learn the score.** Training converged by ~step 2500 (loss floor ~0.45). Oracle reconstructs
+  0.000 Å.
+- **But every sampling mode under-shoots sp3:** full-gen frac=1.0 gives **sp3 72.6 ± 3.4 vs
+  ref 94.4**, mean CN 3.78 vs 3.94, C-C peak 1.46–1.49 vs 1.54 Å, energy **+500 meV/atom**.
+  All fractions land ~73–75%. sp²-excess is self-consistent (sp² bonds ~1.42 Å are shorter →
+  lower CN + shorter peak). Multi-seed spread 1.11 Å (diversity real); memNN saturates at
+  1.0000 (single-species SOAP ceiling — read spread, not memNN).
+- **SDEdit did NOT help** (73.9% at start_sigma 0.15, same as full-gen): with 500 ladder
+  levels even a low start still runs ~1600 low-σ Langevin steps, washing out the seed anchor.
+- **0 K MACE quench is decisive:** drops energy ~250–280 meV but sp3 does NOT recover (74.5 →
+  75, CN 3.82 → 3.76). The generated structures sit in GENUINE sp²-rich minima → a TOPOLOGY
+  problem, not under-relaxation. A quench can't cross the bond-breaking barrier.
+- **Root cause (diagnose):** at σ_max the score is under-predicted ~4× (cos 0.26, ratio 0.27),
+  so the anneal never commits to the tetrahedral network. In2O3/gen6 was only ~2× weak there.
+
+### SCREENING (built, ready to run) — decide levers before blaming data volume
+Sampling-only (reuse `checkpoints/ac/final.pt`, no retrain): **`tune_ac.job`** grids
+`langevin_step_lr {1e-4,2e-4,3e-4} × langevin_steps {5,10,20}` at frac=1.0 (give the weak
+high-σ score more drift/iterations), plus a **MACE NVT temperature line-search {600,800,1000,
+1200 K}** (finite-T MD to climb OUT of the sp² basin — the quench says it needs real T; too
+high melts; want sp3↑ AND energy↓). Retrain: **`screen_ac.job`** trains 4 variants from
+`scripts/make_ac_variants.py` — `ac_s09` (σ_max 0.9), `ac_s12` (σ_max 1.2), `ac_cap` (hidden
+128/64/16 ≈ 229k params vs 74k), `ac_cap_s09` (both) — each diagnosed (is σ_max still weak?)
+and swept for sp3. Read all with **`scripts/collect_ac.py <outdir>`** (sp3 gen/ref, d_sp3, CN,
+spread, memNN, ΔE, post-NVT). Hypotheses: 0.6 Å moves barely reorganize a C network (→ larger
+σ_max); 74k params may under-sharpen the highly-structured sp3 score (→ capacity). Baseline
+(`ac`, σ_max 0.6) already trained — compare against `outputs/sweep_ac`.
+
 **Data (Mac `/Users/matt/Desktop/data/aC`, cluster `/scratch/midway3/bousquet/diffusion/aC`).**
 10 independent AIMD final snapshots, 216 atoms each, single density 3.25 g/cc, boxes
 10.86–10.97 Å. This is the ENTIRE training set. `coordination_numbers.py` (rcut=1.95 Å,
