@@ -147,8 +147,24 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
    frames (`multiseed_spread_rmsd_nvt`, collector column `spread_nvt`) so a quench that
    collapsed diversity would show. Small n (2×3=6 frames) — scale up for a publication number.
    `mace.nvt_steps` still defaults 0 (opt-in; MACE-heavy).
-3. **Surfaces** (the end goal) — `mask.geometry: slab` implemented/tested; needs vacuum-cell
-   handling. The low-frac tuning above is the closest proxy already in hand.
+3. **Surfaces** (the end goal) — branch **`in2o3-surfaces`** (forked from this line; a-C work
+   is on the SEPARATE `amorphous-carbon` branch, keep them apart). Two planned paths, both
+   use the same slab machinery below: **(A)** inpaint a surface region with the bulk gen6
+   model (free, reuses low-frac inpainting; but the bulk model never saw a surface, so expect
+   bulk-like terminations that need relaxation); **(B)** pretrain on published *other-oxide*
+   crystal surfaces (2 species metal+O, ideally in **reduced/bond-length units** so it learns
+   scale-free surface physics), then fine-tune on the bulk a-IO data. Bar = "good guesses" →
+   DFT/MACE relax as arbiter. User is sourcing the oxide-surface dataset.
+
+   **SLAB-WITH-VACUUM MACHINERY — BUILT (commit on `in2o3-surfaces`), tests `test_slab.py`.**
+   Per-axis periodicity via `graph.pbc: [true,true,false]` (open z = vacuum). Threaded through
+   `build_graph_torch`, `min_image`, `_wrap`, VE training loss, `ve_inpaint`, `inpaint_dispatch`,
+   `diagnose`. An open axis is never wrapped and never bonds across the vacuum (even a thin gap);
+   `uniform_init` gains `bounds` and `ve_inpaint` auto-confines the mobile prior to the surface
+   band so atoms don't spawn in vacuum. Default `[true,true,true]` = bulk, byte-identical (a
+   regression test asserts it). STILL TODO for surfaces: slab configs + data with vacuum cells;
+   revisit the RF rule on the in-plane axes (surfaces are in-plane-confined like the 80-cell,
+   box/2 there, so cutoff×n_layers must fit); mobile-only validation metrics for a surface layer.
 
 ### For re-running the passing verdict (reference)
 `scripts/sweep.py` + `--mace`: 7 fractions × 3 × 10 × 2600 forwards = 546k sequential

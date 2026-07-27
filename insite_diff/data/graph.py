@@ -80,6 +80,7 @@ def build_graph_torch(
     cell: torch.Tensor,
     cutoff: float,
     max_neighbors: int = 0,
+    pbc=None,
 ) -> Graph:
     """GPU-native minimum-image neighbor graph via O(N^2) pairwise distances.
 
@@ -87,14 +88,23 @@ def build_graph_torch(
     not stall a CUDA training step. For N ~ 640 the N^2 pairwise block is trivial;
     a cell list would be needed only for much larger cells. Edge convention matches
     ``build_graph``: src=j (neighbor), dst=i (center), edge_vec = r_i - r_j.
+
+    ``pbc`` (length-3 bool) marks an axis open (a slab's vacuum direction): that axis
+    is not wrapped, so atoms never bond to a periodic image across the vacuum even if
+    the gap is thin. Default (None) = fully periodic, identical to before.
     """
+    from ..diffusion.noising import pbc_mask   # local import: avoid a module cycle
     n = positions.shape[0]
     device, dtype = positions.device, positions.dtype
     cell = cell.to(dtype)
     inv = torch.linalg.inv(cell)
     delta = positions[None, :, :] - positions[:, None, :]     # (N,N,3): delta[i,j] = r_j - r_i
     frac = delta @ inv
-    disp = (frac - torch.round(frac)) @ cell                  # minimum-image r_j - r_i
+    shift = torch.round(frac)
+    p = pbc_mask(pbc, frac)
+    if p is not None:
+        shift = shift * p                                     # open axes: no wrap
+    disp = (frac - shift) @ cell                              # minimum-image r_j - r_i
     dist = disp.norm(dim=-1)                                  # (N,N)
 
     within = (dist < cutoff) & (dist > 1e-8)                  # exclude self

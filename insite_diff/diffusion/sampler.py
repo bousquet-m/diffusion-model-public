@@ -73,10 +73,17 @@ def sample(
 PredictEps = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]  # (x, sigma) -> eps_hat
 
 
-def _wrap(pos: torch.Tensor, cell: torch.Tensor) -> torch.Tensor:
+def _wrap(pos: torch.Tensor, cell: torch.Tensor, pbc=None) -> torch.Tensor:
+    """Wrap positions into the cell. A non-periodic axis (``pbc`` False) is left
+    unwrapped so a slab's surface atoms are not folded through the vacuum gap."""
+    from .noising import pbc_mask
     cell = cell.to(pos.dtype)
     frac = pos @ torch.linalg.inv(cell)
-    return (frac - torch.floor(frac)) @ cell
+    shift = torch.floor(frac)
+    p = pbc_mask(pbc, frac)
+    if p is not None:
+        shift = shift * p
+    return (frac - shift) @ cell
 
 
 @torch.no_grad()
@@ -91,6 +98,8 @@ def annealed_langevin(
     generator: torch.Generator | None = None,
     device: torch.device | str = "cpu",
     x_init: torch.Tensor | None = None,
+    pbc=None,
+    prior_bounds: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """NCSN annealed Langevin from a uniform-in-cell prior.
 
@@ -98,10 +107,12 @@ def annealed_langevin(
     ``-eps_hat / sigma``. For each sigma (high->low) we take ``langevin_steps``
     Langevin steps with step size ``step_lr * (sigma/sigma_min)^2`` and external
     CoM-free noise, then a final ``refine_steps`` at sigma_min without external
-    noise. Positions are wrapped into the cell (PBC) each step.
-    """
+    noise. Positions are wrapped into the cell each step (open axes per ``pbc`` are
+    not wrapped). ``prior_bounds`` (3,2) confines the uniform prior to a sub-region
+    (e.g. the material slab, not the vacuum)."""
     cell = cell.to(device)
-    x = uniform_init(n_atoms, cell, generator=generator, device=device, dtype=cell.dtype) \
+    x = uniform_init(n_atoms, cell, generator=generator, device=device, dtype=cell.dtype,
+                     bounds=prior_bounds) \
         if x_init is None else x_init.to(device)
     sigmas = schedule.sigmas.to(device)
     sigma_min = sigmas[-1]
@@ -113,7 +124,7 @@ def annealed_langevin(
         if add_noise:
             z = com_free_noise(n_atoms, generator=generator, device=device, dtype=x.dtype)
             x = x + torch.sqrt(2 * step) * z
-        return _wrap(x, cell)
+        return _wrap(x, cell, pbc)
 
     for sigma in sigmas:
         for _ in range(langevin_steps):

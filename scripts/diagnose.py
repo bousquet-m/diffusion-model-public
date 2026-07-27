@@ -46,7 +46,8 @@ def diagnose_ve(model, cfg, pos, cell, types, n, device, repeats):
         for _ in range(repeats):
             x_sigma, eps = ve_add_noise(pos, sigma, cell)
             with torch.no_grad():
-                g = build_graph_torch(x_sigma, cell, cfg.graph.cutoff, cfg.graph.max_neighbors)
+                g = build_graph_torch(x_sigma, cell, cfg.graph.cutoff, cfg.graph.max_neighbors,
+                                      pbc=cfg.graph.pbc)
                 eps_hat = model(types, g.edge_index, g.edge_vec, sched.cond(sigma), n)
             coss.append(torch.cosine_similarity(eps_hat.flatten(), eps.flatten(), dim=0).item())
             mses.append(torch.mean((eps_hat - eps) ** 2).item())

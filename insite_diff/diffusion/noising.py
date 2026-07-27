@@ -44,12 +44,27 @@ from .schedule import VPSchedule
 # --------------------------------------------------------------------------- #
 # PBC / CoM helpers (torch)
 # --------------------------------------------------------------------------- #
-def min_image(delta: torch.Tensor, cell: torch.Tensor) -> torch.Tensor:
-    """Wrap Cartesian displacements (..., 3) into the minimum image for ``cell`` (3,3)."""
+def pbc_mask(pbc, frac: torch.Tensor) -> torch.Tensor | None:
+    """Per-axis periodicity as a (3,) float in frac's dtype/device, or None if fully
+    periodic. ``pbc`` may be None/True (all periodic) or a length-3 bool sequence."""
+    if pbc is None or pbc is True or all(bool(p) for p in pbc):
+        return None
+    return torch.as_tensor([1.0 if p else 0.0 for p in pbc], dtype=frac.dtype, device=frac.device)
+
+
+def min_image(delta: torch.Tensor, cell: torch.Tensor, pbc=None) -> torch.Tensor:
+    """Minimum-image Cartesian displacements (..., 3) for ``cell`` (3,3).
+
+    With ``pbc`` (length-3 bool) a False axis is treated as open (a slab's vacuum
+    direction): the raw displacement is kept there instead of wrapping to the nearest
+    periodic image. Default (None) = fully periodic, identical to before."""
     inv = torch.linalg.inv(cell)
     frac = delta @ inv
-    frac = frac - torch.round(frac)
-    return frac @ cell
+    shift = torch.round(frac)
+    p = pbc_mask(pbc, frac)
+    if p is not None:
+        shift = shift * p                  # open axes (p=0): no wrap, keep raw displacement
+    return (frac - shift) @ cell
 
 
 def pbc_center(positions: torch.Tensor, cell: torch.Tensor) -> torch.Tensor:
@@ -177,14 +192,22 @@ def add_noise(schedule: VPSchedule, positions: torch.Tensor, cell: torch.Tensor,
 def uniform_init(n_atoms: int, cell: torch.Tensor,
                  generator: torch.Generator | None = None,
                  device: torch.device | str = "cpu",
-                 dtype: torch.dtype = torch.float32) -> torch.Tensor:
+                 dtype: torch.dtype = torch.float32,
+                 bounds: torch.Tensor | None = None) -> torch.Tensor:
     """Atoms uniformly distributed in the cell (fractional coords ~ U(0,1)).
 
     This is the VE prior: it already fills the box at the right density, so the
     diffusion only has to fix *local* order — unlike the VP Gaussian blob, which
     concentrates atoms in the center and collapses.
+
+    ``bounds`` (3,2) gives per-axis fractional [lo, hi] so the prior fills only a
+    sub-region — e.g. the material slab, not the vacuum, along a non-periodic axis.
+    Default (None) = full cell on every axis, identical to before.
     """
     frac = draw_rand((n_atoms, 3), device, dtype, generator)
+    if bounds is not None:
+        b = torch.as_tensor(bounds, dtype=dtype, device=frac.device)     # (3,2)
+        frac = b[:, 0] + (b[:, 1] - b[:, 0]) * frac
     return frac @ cell.to(device=frac.device, dtype=dtype)
 
 

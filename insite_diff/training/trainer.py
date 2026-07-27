@@ -148,7 +148,7 @@ def train(cfg: Config) -> str:
         schedule = VESchedule(d.sigma_min, d.sigma_max, d.n_sigma_levels).to(device)
         def compute_loss(batch):
             return batch_ve_loss(model, schedule, batch, cfg.graph.cutoff,
-                                 cfg.graph.max_neighbors, device)
+                                 cfg.graph.max_neighbors, device, pbc=cfg.graph.pbc)
     else:
         schedule = VPSchedule(d.timesteps, d.beta_schedule).to(device)
         def compute_loss(batch):

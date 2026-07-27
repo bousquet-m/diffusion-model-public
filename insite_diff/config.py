@@ -70,6 +70,17 @@ class GraphConfig:
     max_neighbors: int = 32  # 0 => no cap
     # NOTE: cutoff * model.n_layers must stay < box/2 on the validation set so
     # the masked interior keeps a receptive-field-thick context buffer.
+    # Per-axis periodicity. [True,True,True] = bulk (default, unchanged). Set an axis
+    # False for a slab's vacuum direction: the graph/wrap/prior treat it as open, so
+    # atoms neither bond across the vacuum nor spawn/fold into it. Surfaces use e.g.
+    # [true, true, false] (open z). Must also keep cutoff*n_layers < box/2 on periodic
+    # axes; the open axis has no such constraint.
+    pbc: list = field(default_factory=lambda: [True, True, True])
+
+    def __post_init__(self) -> None:
+        if len(self.pbc) != 3:
+            raise ValueError(f"graph.pbc must have 3 entries (x,y,z), got {self.pbc!r}")
+        self.pbc = [bool(p) for p in self.pbc]
 
 
 @dataclass

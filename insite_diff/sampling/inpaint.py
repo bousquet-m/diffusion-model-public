@@ -22,7 +22,7 @@ import torch
 
 from ..data.graph import build_graph_torch
 from ..diffusion.noising import (com_free_noise, draw_randn, min_image, pbc_center,
-                                 q_sample, structure_scale, uniform_init)
+                                 pbc_mask, q_sample, structure_scale, uniform_init)
 from ..diffusion.sampler import _wrap
 from ..diffusion.schedule import VESchedule, VPSchedule
 
@@ -128,16 +128,40 @@ def inpaint(
 # VE (amorphous recipe) inpainting — RePaint in annealed Langevin
 # --------------------------------------------------------------------------- #
 @torch.no_grad()
+def _mobile_prior_bounds(positions, cell, mobile_mask, pbc, margin=0.05):
+    """Per-axis fractional [lo,hi] for the mobile prior. On an OPEN (non-periodic) axis
+    it spans the mobile atoms' own extent (± ``margin``, clamped to [0,1]) so surface
+    atoms initialize in the material/surface band, not the vacuum. Periodic axes stay
+    full (0,1). Returns None when fully periodic or there are no mobile atoms."""
+    p = pbc_mask(pbc, positions)
+    if p is None or not mobile_mask.any():
+        return None
+    frac = (positions[mobile_mask] @ torch.linalg.inv(cell.to(positions.dtype)))
+    lo, hi = frac.min(0).values, frac.max(0).values
+    bounds = torch.stack([torch.zeros(3, dtype=positions.dtype, device=positions.device),
+                          torch.ones(3, dtype=positions.dtype, device=positions.device)], dim=1)
+    for a in range(3):
+        if p[a] == 0:                                    # open axis: confine to mobile band
+            span = (hi[a] - lo[a]).clamp(min=1e-3)
+            bounds[a, 0] = (lo[a] - margin * span).clamp(0.0, 1.0)
+            bounds[a, 1] = (hi[a] + margin * span).clamp(0.0, 1.0)
+    return bounds
+
+
 def ve_inpaint(schedule: VESchedule, model, positions: torch.Tensor, cell: torch.Tensor,
                types: torch.Tensor, mobile_mask: torch.Tensor, cutoff: float,
                max_neighbors: int, langevin_steps: int, step_lr: float, refine_steps: int,
-               generator: torch.Generator | None = None, device="cpu") -> torch.Tensor:
+               generator: torch.Generator | None = None, device="cpu", pbc=None) -> torch.Tensor:
     """Clamp context, generate mobile via annealed Langevin.
 
     In physical Cartesian coordinates (no normalized frame), so context atoms are
     simply held at their known positions (re-noised to the current sigma each step,
     RePaint-style); no CoM realignment is needed. mask_frac=1.0 (empty context)
     reduces to unconditional annealed_langevin.
+
+    ``pbc`` (length-3 bool) marks an open axis (a slab's vacuum direction): the graph
+    and wrap skip it, and the mobile prior is confined to the material/surface band so
+    generated atoms do not spawn in the vacuum. Default (None) = fully periodic bulk.
     """
     positions = positions.to(device)
     cell = cell.to(device)
@@ -149,7 +173,7 @@ def ve_inpaint(schedule: VESchedule, model, positions: torch.Tensor, cell: torch
     sigma_min = sigmas[-1]
 
     def predict_eps(x, sigma):
-        g = build_graph_torch(x, cell, cutoff, max_neighbors=max_neighbors)
+        g = build_graph_torch(x, cell, cutoff, max_neighbors=max_neighbors, pbc=pbc)
         return model(types, g.edge_index, g.edge_vec, schedule.cond(sigma), n)
 
     def clamp_context(x, sigma):
@@ -159,7 +183,8 @@ def ve_inpaint(schedule: VESchedule, model, positions: torch.Tensor, cell: torch
             x[context] = positions[context] + sigma * eps_c[context]
         return x
 
-    x = uniform_init(n, cell, generator=generator, device=device, dtype=dtype)
+    bounds = _mobile_prior_bounds(positions, cell, mobile_mask, pbc)
+    x = uniform_init(n, cell, generator=generator, device=device, dtype=dtype, bounds=bounds)
     x = clamp_context(x, sigmas[0])
     for sigma in sigmas:
         step = step_lr * (sigma / sigma_min) ** 2
@@ -168,14 +193,14 @@ def ve_inpaint(schedule: VESchedule, model, positions: torch.Tensor, cell: torch
             z = com_free_noise(n, generator=generator, device=device, dtype=dtype)
             x = x + step * (-eps_hat / sigma) + torch.sqrt(2 * step) * z
             x = clamp_context(x, sigma)          # RePaint: re-noised known context
-            x = _wrap(x, cell)
+            x = _wrap(x, cell, pbc)
     for _ in range(refine_steps):                # final refine, context exact
         eps_hat = predict_eps(x, sigma_min)
         x = x + step_lr * (-eps_hat / sigma_min)
         if context.any():
             x = x.clone()
             x[context] = positions[context]
-        x = _wrap(x, cell)
+        x = _wrap(x, cell, pbc)
     return x
 
 
@@ -188,7 +213,7 @@ def inpaint_dispatch(cfg, model, positions, cell, types, mobile_mask, device,
         return ve_inpaint(sched, model, positions, cell, types, mobile_mask,
                           cfg.graph.cutoff, cfg.graph.max_neighbors,
                           d.langevin_steps, d.langevin_step_lr, d.refine_steps,
-                          generator=generator, device=device)
+                          generator=generator, device=device, pbc=cfg.graph.pbc)
     sched = VPSchedule(d.timesteps, d.beta_schedule).to(device)
     return inpaint(sched, model, positions, cell, types, mobile_mask,
                    cutoff=cfg.graph.cutoff, max_neighbors=cfg.graph.max_neighbors,

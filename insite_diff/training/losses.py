@@ -49,11 +49,12 @@ def batch_eps_loss(model, schedule: VPSchedule, batch: list[dict], cutoff: float
 # VE denoising score matching (amorphous recipe)
 # --------------------------------------------------------------------------- #
 def structure_ve_loss(model, schedule: VESchedule, item: dict, cutoff: float,
-                      max_neighbors: int, device, generator=None) -> torch.Tensor:
+                      max_neighbors: int, device, generator=None, pbc=None) -> torch.Tensor:
     """Denoising score matching: noise at a random sigma level, predict the eps.
 
     The network is conditioned on normalized log(sigma) and predicts the injected
-    CoM-free noise; MSE(eps_hat, eps) is the sigma^2-weighted DSM objective.
+    CoM-free noise; MSE(eps_hat, eps) is the sigma^2-weighted DSM objective. ``pbc``
+    (length-3 bool) makes the neighbor graph open along a slab's vacuum axis.
     """
     pos = item["positions"].to(device)
     cell = item["cell"].to(device)
@@ -62,13 +63,13 @@ def structure_ve_loss(model, schedule: VESchedule, item: dict, cutoff: float,
 
     sigma = schedule.sample_sigma(generator=generator)          # (1,)
     x_sigma, eps = ve_add_noise(pos, sigma, cell, generator=generator)
-    g = build_graph_torch(x_sigma.detach(), cell, cutoff, max_neighbors=max_neighbors)
+    g = build_graph_torch(x_sigma.detach(), cell, cutoff, max_neighbors=max_neighbors, pbc=pbc)
     eps_hat = model(types, g.edge_index, g.edge_vec, schedule.cond(sigma), n)
     return F.mse_loss(eps_hat, eps)
 
 
 def batch_ve_loss(model, schedule: VESchedule, batch: list[dict], cutoff: float,
-                  max_neighbors: int, device, generator=None) -> torch.Tensor:
-    losses = [structure_ve_loss(model, schedule, item, cutoff, max_neighbors, device, generator)
+                  max_neighbors: int, device, generator=None, pbc=None) -> torch.Tensor:
+    losses = [structure_ve_loss(model, schedule, item, cutoff, max_neighbors, device, generator, pbc)
               for item in batch]
     return torch.stack(losses).mean()
