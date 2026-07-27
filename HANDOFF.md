@@ -137,13 +137,16 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
    pre-NVT), within ~1% of ref; bond essentially exact. **Adopt T=500 K:** perfect @ frac 1.0
    (+0.005) and solid low-frac recovery (−0.054). T800 recovers marginally more at low frac
    (−0.020) but OVER-coordinates @ frac 1.0 (+0.019) = the "too hot restructures" canary.
-   TWO CAVEATS (not yet closed): (a) `E_nvt-ref` goes −24..−38 meV, but that compares a
-   QUENCHED gen structure to an UNQUENCHED finite-T ref — most of it is the ref's thermal
-   energy, not over-relaxation; for a fair number, quench the ref too (or trust the
-   structural metrics, which are clean). (b) the `spread` column is PRE-NVT; post-NVT
-   diversity is unmeasured — recompute spread on refined frames before calling diversity
-   proven (640-atom + 150 fs MD makes collapse unlikely but unproven). Small n (2×3=6 frames)
-   — scale up for a publication number. `mace.nvt_steps` still defaults 0 (opt-in; MACE-heavy).
+   TWO CAVEATS — now CLOSED in code (sweep.py), but the existing `outputs/nvt_gen6/` predates
+   the fix so RE-RUN `nvt_refine_gen6.job` to populate the fair numbers: (a) `E_nvt-ref`
+   compared a QUENCHED gen structure to an UNQUENCHED finite-T ref (conflates the ref's
+   thermal energy with over-relaxation) → sweep now also quenches the reference and reports
+   `energy_per_atom.ref_quenched`; the fair ΔE is `gen_after_nvt − ref_quenched` (collector
+   column `E_nvt-refq`). On synthetic check the fair number was ~3× smaller than raw-ref. (b)
+   the `spread` column was PRE-NVT → sweep now recomputes multi-seed spread on the refined
+   frames (`multiseed_spread_rmsd_nvt`, collector column `spread_nvt`) so a quench that
+   collapsed diversity would show. Small n (2×3=6 frames) — scale up for a publication number.
+   `mace.nvt_steps` still defaults 0 (opt-in; MACE-heavy).
 3. **Surfaces** (the end goal) — `mask.geometry: slab` implemented/tested; needs vacuum-cell
    handling. The low-frac tuning above is the closest proxy already in hand.
 

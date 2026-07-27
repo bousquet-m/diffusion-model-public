@@ -36,7 +36,9 @@ def main() -> None:
     hdr = (f"{'run':>10} {'frac':>5} {'coord gen/ref':>15} {'d_coord':>8} "
            f"{'bond gen/ref':>17} {'E gen-ref(meV)':>15} {'spread(A)':>10}")
     if has_nvt:
-        hdr += f" {'coord_nvt':>9} {'d_coord_nvt':>11} {'E_nvt-ref(meV)':>14}"
+        # E_nvt is vs the QUENCHED ref (fair: inherent structure vs inherent structure);
+        # falls back to the raw ref for older runs that predate ref_quenched.
+        hdr += f" {'coord_nvt':>9} {'d_coord_nvt':>11} {'E_nvt-refq(meV)':>15} {'spread_nvt':>10}"
     print(hdr)
     print("-" * len(hdr))
     for rd in run_dirs:
@@ -52,14 +54,16 @@ def main() -> None:
                     f"{de:>+15.1f} {r['multiseed_spread_rmsd']:>10.3f}")
             if has_nvt and "gen_nvt" in c:
                 cn = c["gen_nvt"]
-                enr = (e["gen_after_nvt"] - e["ref"]) * 1000 if e and "gen_after_nvt" in e else float("nan")
-                line += f" {cn:>9.3f} {cn - c['ref']:>+11.3f} {enr:>+14.1f}"
+                refq = e.get("ref_quenched", e["ref"]) if e else None
+                enr = (e["gen_after_nvt"] - refq) * 1000 if (e and "gen_after_nvt" in e) else float("nan")
+                spn = r.get("multiseed_spread_rmsd_nvt", float("nan"))
+                line += f" {cn:>9.3f} {cn - c['ref']:>+11.3f} {enr:>+15.1f} {spn:>10.3f}"
             print(line)
     tail = ("\nbetter = d_coord nearer 0 and |E gen-ref| smaller, spread NOT collapsed "
             "(that would be relaxation bought with diversity).")
     if has_nvt:
-        tail += ("\nNVT (step 4) works if d_coord_nvt is nearer 0 than d_coord and "
-                 "E_nvt-ref < E gen-ref — i.e. the refinement recovered coordination/energy.")
+        tail += ("\nNVT (step 4) works if d_coord_nvt is nearer 0 than d_coord, E_nvt-refq "
+                 "(gen vs QUENCHED ref) is small, and spread_nvt has not collapsed vs spread.")
     print(tail)
 
 

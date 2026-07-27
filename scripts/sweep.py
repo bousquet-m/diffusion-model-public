@@ -153,11 +153,32 @@ def run_fraction(cfg, model, val_ds, mask_frac, device, args, train_desc):
                                   seed=cfg.seed + i)[0] for i, a in enumerate(gen_frames)]
             rec["gen_after_nvt"] = float(np.mean([potential_energy(a, calc) / len(a)
                                                   for a in refined]))
+            # Fair energy: the raw ref is a finite-T MD snapshot, so comparing
+            # gen_after_nvt (a 0 K inherent structure) to it conflates the ref's thermal
+            # energy with over-relaxation. Quench the (unique) references the same way and
+            # compare inherent structure to inherent structure. ref_frames repeats each
+            # structure n_seeds times, so quench one per group.
+            ns = args.n_seeds
+            uniq_ref = ref_frames[::ns]
+            rec["ref_quenched"] = float(np.mean([relax(a, calc, m.relax_fmax, m.relax_steps)[2] / len(a)
+                                                 for a in uniq_ref]))
             nvt_rdf = all_partials(refined, Z_IN, Z_O, rmax, nbins, masks, restrict=restrict)
             nvt_c = coordination.summary(refined, Z_IN, Z_O, cn, masks, center_mobile_only=cmo)
             result["In-O_peak"]["gen_nvt"] = first_peak(*nvt_rdf["In-O"])
             result["mean_In-O_bond"]["gen_nvt"] = nvt_c["mean_bond"]
             result["mean_In-O_coordination"]["gen_nvt"] = nvt_c["mean_cn"]
+            # Post-NVT diversity: the quench could collapse diverse samples into one basin,
+            # which the pre-NVT spread would miss. Recompute multi-seed spread on the refined
+            # frames, grouped by structure (n_seeds consecutive samples share a mask).
+            nvt_spreads = []
+            for gi in range(0, len(refined), ns):
+                grp = refined[gi:gi + ns]
+                if len(grp) > 1:
+                    nvt_spreads.append(similarity.multi_seed_spread(
+                        [a.get_positions() for a in grp], grp[0].get_atomic_numbers(),
+                        np.asarray(grp[0].get_cell()), masks[gi])["mean_rmsd"])
+            if nvt_spreads:
+                result["multiseed_spread_rmsd_nvt"] = float(np.mean(nvt_spreads))
         result["energy_per_atom"] = rec
     return result
 
