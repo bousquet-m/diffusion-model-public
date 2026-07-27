@@ -236,16 +236,20 @@ core machinery working on **bulk** In₂O₃; the end goal is **surface reconstr
    is set during the ANNEAL, not the final quench. 1e-4 is near the safe ceiling: step ~
    lr·(σ/σ_min)² ≈ 0.56 Å @ σ_max; 2e-4 (~1.1 Å) risks instability, so don't crank further.
    **Residual: low-frac still −0.16 / +27 meV** — that is step 2's (NVT) job.
-2. **[BUILT, not yet run] MACE NVT post-refinement** (`nvt_refine_gen6.job`) — the paper's
-   cleanup for the under-relaxation. `mace_relax.nvt_refine` = short Langevin NVT MD + 0 K
-   quench. **NVT ONLY (no NPT):** scan_v3_swa is unreliable for stress/cell dynamics, so the
-   generated box is held fixed — the thermostat never touches the cell (a test asserts this).
-   `sweep.py --nvt-steps/--nvt-temp/--nvt-timestep` (or `mace.nvt_*` in config) refines each
-   generated frame and reports post-NVT coordination/bond/energy (`*.gen_nvt`,
-   `energy_per_atom.gen_after_nvt`). `collect_langevin_tuning.py` shows the extra columns.
-   Job does a T line-search {300,500,800 K}. Works if `d_coord_nvt`→0 and `E_nvt-ref` <
-   `E gen-ref`; too-high T restructures. Run only if step 1's knobs leave a gap — but it's
-   ready either way. NVT is MACE-heavy (nvt_steps+relax_steps force evals per frame).
+2. **[DONE] MACE NVT post-refinement** (`nvt_refine_gen6.job`, `outputs/nvt_gen6/`). Short
+   Langevin NVT MD + 0 K quench, NVT-only (thermostat never touches the cell; a test asserts
+   it). T line-search {300,500,800 K} × frac {0.1,1.0}. **Verdict: NVT closes the residual
+   low-frac coordination gap** — d_coord_nvt −0.02..−0.05 @ frac 0.1 (from −0.11..−0.16
+   pre-NVT), within ~1% of ref; bond essentially exact. **Adopt T=500 K:** perfect @ frac 1.0
+   (+0.005) and solid low-frac recovery (−0.054). T800 recovers marginally more at low frac
+   (−0.020) but OVER-coordinates @ frac 1.0 (+0.019) = the "too hot restructures" canary.
+   TWO CAVEATS (not yet closed): (a) `E_nvt-ref` goes −24..−38 meV, but that compares a
+   QUENCHED gen structure to an UNQUENCHED finite-T ref — most of it is the ref's thermal
+   energy, not over-relaxation; for a fair number, quench the ref too (or trust the
+   structural metrics, which are clean). (b) the `spread` column is PRE-NVT; post-NVT
+   diversity is unmeasured — recompute spread on refined frames before calling diversity
+   proven (640-atom + 150 fs MD makes collapse unlikely but unproven). Small n (2×3=6 frames)
+   — scale up for a publication number. `mace.nvt_steps` still defaults 0 (opt-in; MACE-heavy).
 3. **Surfaces** (the end goal) — `mask.geometry: slab` implemented/tested; needs vacuum-cell
    handling. The low-frac tuning above is the closest proxy already in hand.
 
